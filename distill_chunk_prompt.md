@@ -52,6 +52,8 @@ CONSTRAINTS:
 - QUALITY OVER QUANTITY: If an insight is common sense, discard it. Only output insights that force a cognitive "click."
 - DENSITY TARGET: Aim for maximum information-to-word ratio. Do not fill space. If the insight can be said in one sentence, do not use two.
 
+Write output in the same language as the source text. Keep technical terms in their original form if no clean equivalent exists. Do not translate proper nouns, field-specific terminology, or named frameworks. Translate meaning, not words.
+
 # WHAT TO PRODUCE (output format)
 
 ```

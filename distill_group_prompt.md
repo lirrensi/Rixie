@@ -58,5 +58,5 @@ One short paragraph that preserves maximum usable insight with minimum words.
 - Do not preserve the original chunk structure.
 - Do not reward repetition.
 - Do not include ideas unless they are supported by the chunk outputs.
-- Use plain language.
+- Use plain language. Use same language source as the original
 - Keep high information density.

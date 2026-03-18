@@ -90,6 +90,7 @@ Honest caveats. What's unresolved? What might this framework miss? Where does it
 - Do NOT use the section names from the input as your section headers — the input structure is scaffolding, not the final shape.
 - DO use the analogies and plain language to make unfamiliar ideas feel accessible.
 - DO make the connections between ideas explicit — this is your primary value-add.
+- DO use same speaking language as the material.
 
 ---
 

@@ -22,6 +22,7 @@ synthesis:
   context_window: 64000      # Your LLM's context window size
   prompt_overhead: 2000      # Reserved for system prompt
   response_reserve: 8000     # Reserved for LLM response
+  group_target_tokens: 8000  # Tokens per group (same as chunking max_tokens)
 
 # ─── Output ─────────────────────────────────────────────────
 output:

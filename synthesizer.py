@@ -5,9 +5,9 @@ Groups distillations → Final readable synthesis.
 Flow:
   distilled/*.md  →  synthesis/group_N.md  →  output/final.md
 
-Max context window controls how many chunks per group.
-Final synthesis is optional (--final flag) and always runs the
-readability prompt, even for a single group.
+Group size targets ~group_target_tokens output (configurable).
+Context window is the hard limit, not the target.
+Final synthesis is optional (--final flag).
 """
 
 import re
@@ -95,6 +95,7 @@ def synthesize_book(
     prompt_overhead = synth.get("prompt_overhead", 2000)
     response_reserve = synth.get("response_reserve", 8000)
     usable = context_window - prompt_overhead - response_reserve
+    group_target = synth.get("group_target_tokens", 8000)
 
     client = OpenAI(base_url=base_url, api_key=api_key)
     synthesis_dir.mkdir(parents=True, exist_ok=True)
@@ -106,12 +107,13 @@ def synthesize_book(
     if not chunks:
         return {"chunks": 0, "groups": 0, "final": False}
 
-    # Auto-calculate group size
+    # Auto-calculate group size: pack as many distilled chunks as fit
+    # in ~group_target tokens (same logic as chunking).
     avg = sum(c["tokens"] for c in chunks) / len(chunks)
-    group_size = max(1, int(usable / avg))
+    group_size = max(1, int(group_target / avg))
     num_groups = math.ceil(len(chunks) / group_size)
 
-    print(f"   Avg: {avg:.0f} tokens | Context: {context_window:,}")
+    print(f"   Avg: {avg:.0f} tok/chunk | Target: ~{group_target:,} tok/group")
     print(f"   → {group_size} chunks/group → {num_groups} groups\n")
 
     # ─── Group distillation ──────────────────────────────────
