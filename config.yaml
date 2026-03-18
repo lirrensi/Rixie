@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════════
+# BookConvert Configuration
+# ═══════════════════════════════════════════════════════════════
+# Edit these values to match your setup. 
+# This file is the ONLY place you need to change LLM settings.
+
+# ─── LLM Connection ─────────────────────────────────────────
+llm:
+  base_url: "http://localhost:58080/v1"  # OpenAI-compatible endpoint
+  api_key: "local"                       # API key (use "local" for no auth)
+  model: "gpt-4o-mini"                   # Model name
+  temperature: 0.3                       # Creativity (0=deterministic, 1=chaos)
+
+# ─── Chunking ───────────────────────────────────────────────
+chunking:
+  max_tokens: 8000           # Max tokens per chunk (tiktoken)
+  encoding_model: "gpt-4o-mini"  # Which tokenizer to use
+
+# ─── Synthesis ──────────────────────────────────────────────
+synthesis:
+  temperature: 0.4           # Slightly higher for creative synthesis
+  context_window: 64000      # Your LLM's context window size
+  prompt_overhead: 2000      # Reserved for system prompt
+  response_reserve: 8000     # Reserved for LLM response
+
+# ─── Output ─────────────────────────────────────────────────
+output:
+  generate_html: true        # Export HTML after synthesis
+  generate_final: true       # Run final merge step
