@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rixie Book Distillation"
+  short_description: "Customize and run the Rixie book pipeline"
+  default_prompt: "Use $rixie-book-distillation to bootstrap a fresh copy of the Rixie wrapper, customize `config.yaml` and the prompt templates, and run the distillation pipeline."
