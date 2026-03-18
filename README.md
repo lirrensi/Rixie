@@ -4,6 +4,56 @@
 
 Throw books in, get distilled knowledge out. That's it.
 
+## Philosophy
+
+Most book summarizers give you "what the author said." Rixie gives you "what the book makes you capable of."
+
+The distillation focuses on four dimensions of knowledge:
+
+| Dimension | Question | Output |
+|-----------|----------|--------|
+| **Receptors** | What can I now *see* that I was blind to before? | New mental models and lenses |
+| **Operations** | What can I now *do* that I couldn't do before? | Actionable heuristics and procedures |
+| **Immune Responses** | What can I now *recognize and reject*? | Bullshit detection patterns |
+| **Generator** | If the book vanished, what one principle rebuilds it? | The seed of the entire argument |
+
+The goal isn't to remember the book. It's to *become someone who thinks differently* because they read it. Every insight must pass the "nugget vs. platitude" test — common sense gets discarded, only cognitive upgrades survive.
+
+## How It Works
+
+Rixie processes books through three stages of distillation, each one compressing and refining the knowledge:
+
+### Stage 1: Chunking
+The book is split into chunks that respect natural boundaries (chapters, sections) while staying within a token limit. This keeps each distillation focused on a coherent piece of the argument.
+
+### Stage 2: Per-Chunk Distillation
+Each chunk goes through the distillation prompt individually. The LLM extracts receptors, operations, immune responses, and a "seed principle" — stripping away anecdotes and examples, keeping only the functional knowledge.
+
+### Stage 3: Synthesis (Group → Final)
+This is where the magic happens. The distilled chunks are merged in two passes:
+
+**Group Synthesis** — Chunks are combined into thematic groups. Deduplicated, connected, and elevated. What you get is tighter than the individual distillations because patterns across chunks become visible.
+
+**Final Merge** (optional) — All groups merge into one definitive document. Organized by theme, not chapter order. This is the "if you only read one thing" version.
+
+### Context Window = Granularity Control
+
+The `context_window` setting in `config.yaml` controls how many chunks get grouped together:
+
+```
+synthesis:
+  context_window: 64000      # Your LLM's context window size
+  prompt_overhead: 2000      # Reserved for system prompt
+  response_reserve: 8000     # Reserved for LLM response
+```
+
+Rixie calculates usable space (`context_window - prompt_overhead - response_reserve`) and fits as many distilled chunks as possible into each group. So:
+
+- **Smaller context window** → more groups, more granular, preserves more detail
+- **Larger context window** → fewer groups, more synthesis, broader connections
+
+If your LLM supports 128k context, try doubling it. You'll get fewer, richer groups that see bigger patterns. If you want to preserve more detail, reduce it. The pipeline adapts automatically.
+
 ## Quick Start
 
 ```bash
