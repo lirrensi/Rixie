@@ -105,9 +105,10 @@ def export_html(
     result = result.replace("{{DATA_TEXTAREAS}}", data_textareas)
 
     # Write
-    html_path = book_dir / "index.html"
+    html_filename = f"{book_name}.html"
+    html_path = book_dir / html_filename
     html_path.write_text(result, encoding="utf-8")
-    print(f"   🌐 Exported → {html_path.name} ({len(result):,} bytes)")
+    print(f"   🌐 Exported → {html_filename} ({len(result):,} bytes)")
     return html_path
 
 

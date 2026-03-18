@@ -57,11 +57,11 @@
     .loading { color: var(--text-dim); font-style: italic; }
 
     .header { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid var(--border); }
-    .header h1 { font-size: 2rem; color: var(--accent); border: none; margin: 0; }
+    .header h1 { font-size: 2rem; color: var(--accent); border: none; margin: 0; overflow-wrap: break-word; word-break: break-word; }
     .subtitle { color: var(--text-dim); font-size: 0.9rem; }
 
     .theme-bar {
-        display: flex; align-items: center; gap: 0.35rem;
+        display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
         margin-top: 0.8rem; font-size: 0.85rem; color: var(--text-dim);
     }
     .theme-bar .label { margin-right: 0.5rem; }
@@ -100,10 +100,15 @@
     .chunk-accordion[open] summary { border-bottom: 1px solid var(--border); }
 
     @media (max-width: 600px) {
-        body { padding: 1rem; }
+        body { padding: 0.5rem; }
         .tabs { flex-direction: column; }
         .tab-btn { border-radius: 0; }
         .tab-btn:first-child { border-radius: 8px 8px 0 0; }
+        .theme-bar { gap: 0.25rem; }
+        .theme-btn { padding: 0.2rem 0.4rem; font-size: 0.75rem; }
+        .tab-content { padding: 0.75rem; }
+        .content { padding: 0.5rem; }
+        .chunk-accordion summary { padding: 0.75rem 1rem; }
     }
 </style>
 </head>

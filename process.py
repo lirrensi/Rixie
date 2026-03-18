@@ -16,7 +16,7 @@ Directory structure:
         ├── distilled/      → Individual distillations
         ├── synthesis/      → Group distillations
         ├── final.md        → Final synthesis (if enabled)
-        └── index.html      → HTML export (if enabled)
+        └── {book_name}.html  → HTML export (if enabled)
 
 Config:
     config.yaml             → LLM params (base_url, api_key, model, temperature)
@@ -165,7 +165,7 @@ def process_book(book_path: Path, config: dict) -> bool:
     if do_final and stats.get("final"):
         print(f"   Final:     {book_dir / 'final.md'}")
     if do_html:
-        print(f"   HTML:      {book_dir / 'index.html'}")
+        print(f"   HTML:      {book_dir / f'{book_name}.html'}")
     print(f"{'═' * 60}")
     return True
 

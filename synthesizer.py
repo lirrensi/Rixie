@@ -189,7 +189,11 @@ def synthesize_book(
                     result = run_llm(client, combined, final_prompt, model, temperature)
                     elapsed = time.time() - t
 
-                    final_path.write_text(result, encoding="utf-8")
+                    # Derive book name from directory
+                    book_name = output_dir.name.replace("_", " ")
+                    final_output = f"# {book_name}\n\n{result}"
+
+                    final_path.write_text(final_output, encoding="utf-8")
                     final_done = True
                     print(
                         f"      ✅ {elapsed:.0f}s | {len(result.split(chr(10)))} lines → {final_path.name}"

@@ -10,6 +10,18 @@ Rixie is an LLM-powered book distiller. It reads your book (Markdown, EPUB, or t
 
 The output isn't a summary. It's a **cognitive upgrade** — what the book makes you *capable of*, not what it said.
 
+### Three Levels of Distillation
+
+Every book produces three layers of output, from deep to digestible:
+
+| Level | What | Where | Read Time |
+|-------|------|-------|-----------|
+| **1 — Chunks** | Raw per-chapter distillations. Full detail, every mental model extracted. | `distilled/*.md` | ~20+ min |
+| **2 — Groups** | Thematic clusters. Deduplicated, connected, cross-chapter patterns emerge. | `synthesis/group_*.md` | ~10 min |
+| **3 — Final** | One readable article. Plain language, analogies, flowing prose. The "vibe check." | `final.md` | ~2 min |
+
+Start with the Final for the big picture. Go to Groups for depth. Dive into Chunks when you want *everything*.
+
 ---
 
 ## Get Started
@@ -43,6 +55,7 @@ synthesis:
   context_window: 64000      # Your model's max context
   prompt_overhead: 2000      # Reserved for system prompt
   response_reserve: 8000     # Reserved for response
+  group_target_tokens: 8000  # Tokens per group (controls granularity)
 ```
 
 ### 3. Drop a Book In
@@ -71,23 +84,23 @@ That's the whole pipeline — chunk, distill, synthesize, export. It's resumable
 output/
 └── my_book/
     ├── chunks/          # Smart chunks (respects chapters)
-    ├── distilled/       # Per-chunk distillations
-    ├── synthesis/       # Group distillations (thematic clusters)
-    ├── final.md         # Final merged synthesis
-    └── index.html       # Beautiful HTML viewer (dark theme, tabs, accordions)
+    ├── distilled/       # Level 1: Per-chunk distillations
+    ├── synthesis/       # Level 2: Group distillations (thematic clusters)
+    ├── final.md         # Level 3: Readable article (2-min vibe check)
+    ├── my_book.html     # Beautiful HTML viewer (dark theme, tabs, accordions)
 ```
 
-Open `index.html` in a browser. Done.
+Open the `.html` file in a browser. Done.
 
 ### (Optional) Tune the Prompts
 
 Three prompt files at the root control how the LLM thinks:
 
-| File | What it does |
-|------|-------------|
-| `distill_chunk_prompt.md` | Extracts knowledge from each chunk |
-| `distill_group_prompt.md` | Merges chunks into thematic groups |
-| `distill_final_prompt.md` | Creates the final synthesis |
+| File | What it does | Output level |
+|------|-------------|--------------|
+| `distill_chunk_prompt.md` | Extracts functional knowledge from each chunk | Level 1 — Chunks |
+| `distill_group_prompt.md` | Merges chunks into thematic groups (dense) | Level 2 — Groups |
+| `distill_final_prompt.md` | Rewrites groups into a readable article | Level 3 — Final |
 
 Edit them to change what kind of knowledge gets extracted. The defaults focus on mental models, operations, immune responses, and seed principles.
 
@@ -95,12 +108,12 @@ Edit them to change what kind of knowledge gets extracted. The defaults focus on
 
 ## How It Works
 
-Three stages, each one compressing and refining:
+Three stages, each producing a different level of insight:
 
 ### Stage 1: Chunking
 The book is split into chunks that respect natural boundaries (chapters, sections) while staying within a token limit.
 
-### Stage 2: Per-Chunk Distillation
+### Stage 2: Per-Chunk Distillation → Level 1 (Chunks)
 Each chunk goes through the LLM individually. It extracts:
 - **Receptors** — new mental models and lenses
 - **Operations** — actionable heuristics and procedures
@@ -109,20 +122,24 @@ Each chunk goes through the LLM individually. It extracts:
 
 Anecdotes and examples get stripped. Only functional knowledge survives.
 
-### Stage 3: Synthesis (Group → Final)
+### Stage 3: Synthesis → Level 2 (Groups) + Level 3 (Final)
 
-**Group Synthesis** — Chunks merge into thematic groups. Deduplicated, connected, elevated. Cross-chunk patterns become visible.
+**Group Synthesis** — Chunks pack into ~8k token groups and merge. Deduplicated, connected, elevated. Cross-chunk patterns become visible. Multiple groups preserve detail without cramming everything into one output.
 
-**Final Merge** (optional) — All groups become one definitive document. Organized by theme, not chapter order. The "if you only read one thing" version.
+**Final Synthesis** (optional, `--final`) — All groups get rewritten into a single, readable article. Plain language, analogies, flowing prose. Prioritizes connection and readability over density. The "explain it to a friend" version.
 
-### Context Window = Granularity Control
+### Context Window & Group Size
 
-The `context_window` setting controls how many chunks get grouped together:
+Two settings control the granularity:
 
-- **Smaller context window** → more groups, more granular, preserves more detail
-- **Larger context window** → fewer groups, more synthesis, broader connections
+```yaml
+synthesis:
+  context_window: 64000        # LLM's max context (hard limit)
+  group_target_tokens: 8000    # Target tokens per group (controls granularity)
+```
 
-If your LLM supports 128k context, try doubling it. The pipeline adapts automatically.
+- **`group_target_tokens`** — Each group packs as many chunks as fit in this window. Smaller = more groups = more detail. Same value as chunking works well.
+- **`context_window`** — Your LLM's hard limit. Only matters for the final synthesis step.
 
 ---
 
@@ -242,8 +259,8 @@ Rixie/
 │       ├── chunks/                 ← Smart chunks
 │       ├── distilled/              ← Per-chunk distillations
 │       ├── synthesis/              ← Group distillations
-│       ├── final.md                ← Final synthesis
-│       ├── index.html              ← HTML viewer (marked.js)
+│       ├── final.md                ← Level 3: Readable article
+│       ├── {book_name}.html        ← HTML viewer (marked.js)
 │       └── audiobook/              ← 🎧 Audio output
 │           ├── groups.mp3
 │           └── final.mp3
