@@ -1,4 +1,6 @@
-# 📚 BookConvert
+# 📚 Rixie
+
+<img src="assets/rixie.jpg" alt="Rixie" width="200">
 
 Throw books in, get distilled knowledge out. That's it.
 
@@ -202,7 +204,7 @@ For audio merging, install [ffmpeg](https://ffmpeg.org/download.html).
 
 # 📚 BookConvert — Final Structure
 ```text
-BookConvert/
+Rixie/
 ├── input/                          ← Drop books here
 ├── output/
 │   └── {book_name}/
