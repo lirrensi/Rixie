@@ -1,6 +1,6 @@
 # 📚 Rixie
 
-<img src="assets/rixie.jpg" alt="Rixie" width="200">
+<img src="assets/rixie.jpg" alt="Rixie" width="100%">
 
 Throw books in, get distilled knowledge out. That's it.
 
