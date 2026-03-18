@@ -20,7 +20,7 @@ Create the definitive, compressed mental model of this book.
 ### Output Format:
 
 ```
-# [BOOK TITLE] - Complete Distillation
+# Complete Distillation
 
 ## CORE THESIS
 [The ONE sentence that captures the entire book's argument.]

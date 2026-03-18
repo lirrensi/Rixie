@@ -167,6 +167,13 @@ def synthesize_book(
         if final_path.exists():
             print(f"\n   🔄 Final merge already exists → {final_path.name} (skipped)")
             final_done = True
+        # If only 1 group, skip rephrasing — just use it as-is
+        elif len(group_files) == 1:
+            print(f"\n   🔄 Single group → using directly (no re-synthesis)")
+            content = group_files[0].read_text(encoding="utf-8")
+            final_path.write_text(content, encoding="utf-8")
+            final_done = True
+            print(f"      ✅ Copied → {final_path.name}")
         else:
             print(f"\n   🔄 Final merge...")
 
