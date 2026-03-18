@@ -1,75 +1,130 @@
-# 📚 Rixie
+# Rixie
+
+Too long did not Rixie
 
 <img src="assets/rixie.jpg" alt="Rixie" width="100%">
 
-Throw books in, get distilled knowledge out. That's it.
+**Throw books in. Get distilled knowledge out.**
 
-## Philosophy
+Rixie is an LLM-powered book distiller. It reads your book (Markdown, EPUB, or text), breaks it into chunks, and runs each chunk through an LLM that extracts only the *functional* knowledge — mental models, actionable heuristics, bullshit detectors, and the one seed principle that rebuilds the whole argument.
 
-Most book summarizers give you "what the author said." Rixie gives you "what the book makes you capable of."
+The output isn't a summary. It's a **cognitive upgrade** — what the book makes you *capable of*, not what it said.
 
-The distillation focuses on four dimensions of knowledge:
+---
 
-| Dimension | Question | Output |
-|-----------|----------|--------|
-| **Receptors** | What can I now *see* that I was blind to before? | New mental models and lenses |
-| **Operations** | What can I now *do* that I couldn't do before? | Actionable heuristics and procedures |
-| **Immune Responses** | What can I now *recognize and reject*? | Bullshit detection patterns |
-| **Generator** | If the book vanished, what one principle rebuilds it? | The seed of the entire argument |
+## Get Started
 
-The goal isn't to remember the book. It's to *become someone who thinks differently* because they read it. Every insight must pass the "nugget vs. platitude" test — common sense gets discarded, only cognitive upgrades survive.
+### 1. Clone & Install
+
+```bash
+git clone <repo-url> Rixie
+cd Rixie
+uv sync
+```
+
+That's it. `uv` handles everything — Python version, dependencies, all of it.
+
+### 2. Configure Your LLM
+
+Edit `config.yaml` — this is the only file you need to touch:
+
+```yaml
+llm:
+  base_url: "http://localhost:58080/v1"  # Your LLM endpoint (OpenAI-compatible)
+  api_key: "local"                       # API key (use "local" for no auth)
+  model: "gpt-4o-mini"                   # Model name
+  temperature: 0.3                       # 0 = deterministic, 1 = creative
+```
+
+Point `base_url` and `model` at whatever LLM you're running — local (Ollama, LM Studio, vLLM) or remote (OpenAI, etc.). If your model has a different context window, update the `synthesis` section too:
+
+```yaml
+synthesis:
+  context_window: 64000      # Your model's max context
+  prompt_overhead: 2000      # Reserved for system prompt
+  response_reserve: 8000     # Reserved for response
+```
+
+### 3. Drop a Book In
+
+Put your book in the `input/` folder:
+
+```bash
+cp my_book.md input/
+# or
+cp my_book.epub input/
+```
+
+Supported formats: `.md`, `.txt`, `.epub` (requires [pandoc](https://pandoc.org/installing.html)).
+
+### 4. Run It
+
+```bash
+uv run python process.py
+```
+
+That's the whole pipeline — chunk, distill, synthesize, export. It's resumable too: kill it anytime with Ctrl+C and re-run, it picks up where it left off.
+
+### 5. Find Your Output
+
+```
+output/
+└── my_book/
+    ├── chunks/          # Smart chunks (respects chapters)
+    ├── distilled/       # Per-chunk distillations
+    ├── synthesis/       # Group distillations (thematic clusters)
+    ├── final.md         # Final merged synthesis
+    └── index.html       # Beautiful HTML viewer (dark theme, tabs, accordions)
+```
+
+Open `index.html` in a browser. Done.
+
+### (Optional) Tune the Prompts
+
+Three prompt files at the root control how the LLM thinks:
+
+| File | What it does |
+|------|-------------|
+| `distill_chunk_prompt.md` | Extracts knowledge from each chunk |
+| `distill_group_prompt.md` | Merges chunks into thematic groups |
+| `distill_final_prompt.md` | Creates the final synthesis |
+
+Edit them to change what kind of knowledge gets extracted. The defaults focus on mental models, operations, immune responses, and seed principles.
+
+---
 
 ## How It Works
 
-Rixie processes books through three stages of distillation, each one compressing and refining the knowledge:
+Three stages, each one compressing and refining:
 
 ### Stage 1: Chunking
-The book is split into chunks that respect natural boundaries (chapters, sections) while staying within a token limit. This keeps each distillation focused on a coherent piece of the argument.
+The book is split into chunks that respect natural boundaries (chapters, sections) while staying within a token limit.
 
 ### Stage 2: Per-Chunk Distillation
-Each chunk goes through the distillation prompt individually. The LLM extracts receptors, operations, immune responses, and a "seed principle" — stripping away anecdotes and examples, keeping only the functional knowledge.
+Each chunk goes through the LLM individually. It extracts:
+- **Receptors** — new mental models and lenses
+- **Operations** — actionable heuristics and procedures
+- **Immune Responses** — bullshit detection patterns
+- **Generator** — the one principle that rebuilds the whole book
+
+Anecdotes and examples get stripped. Only functional knowledge survives.
 
 ### Stage 3: Synthesis (Group → Final)
-This is where the magic happens. The distilled chunks are merged in two passes:
 
-**Group Synthesis** — Chunks are combined into thematic groups. Deduplicated, connected, and elevated. What you get is tighter than the individual distillations because patterns across chunks become visible.
+**Group Synthesis** — Chunks merge into thematic groups. Deduplicated, connected, elevated. Cross-chunk patterns become visible.
 
-**Final Merge** (optional) — All groups merge into one definitive document. Organized by theme, not chapter order. This is the "if you only read one thing" version.
+**Final Merge** (optional) — All groups become one definitive document. Organized by theme, not chapter order. The "if you only read one thing" version.
 
 ### Context Window = Granularity Control
 
-The `context_window` setting in `config.yaml` controls how many chunks get grouped together:
-
-```
-synthesis:
-  context_window: 64000      # Your LLM's context window size
-  prompt_overhead: 2000      # Reserved for system prompt
-  response_reserve: 8000     # Reserved for LLM response
-```
-
-Rixie calculates usable space (`context_window - prompt_overhead - response_reserve`) and fits as many distilled chunks as possible into each group. So:
+The `context_window` setting controls how many chunks get grouped together:
 
 - **Smaller context window** → more groups, more granular, preserves more detail
 - **Larger context window** → fewer groups, more synthesis, broader connections
 
-If your LLM supports 128k context, try doubling it. You'll get fewer, richer groups that see bigger patterns. If you want to preserve more detail, reduce it. The pipeline adapts automatically.
+If your LLM supports 128k context, try doubling it. The pipeline adapts automatically.
 
-## Quick Start
-
-```bash
-# 1. Drop a book into input/
-cp my_book.md input/
-
-# 2. Run it
-uv run python process.py
-
-# 3. Find your output in output/{book_name}/
-#    - chunks/       → Smart chunks
-#    - distilled/    → Per-chunk distillations  
-#    - synthesis/    → Group distillations
-#    - final.md      → Final merged synthesis
-#    - index.html    → Beautiful HTML viewer (tabs + accordions)
-```
+---
 
 ## Commands
 
@@ -94,11 +149,6 @@ uv run python process.py --no-final
 uv run python process.py --no-html
 ```
 
-### Combine flags
-```bash
-uv run python process.py --no-final --no-html
-```
-
 ### Run individual steps manually
 
 ```bash
@@ -117,6 +167,8 @@ uv run python synthesizer.py output/my_book/distilled --final
 # Just export HTML
 uv run python export_html.py output/my_book "My Book Title"
 ```
+
+---
 
 ## Audiobook
 
@@ -158,81 +210,7 @@ Or use any [edge-tts voice name](https://github.com/rany2/edge-tts#supported-voi
 
 > 💡 If ffmpeg is installed, groups are generated segment-by-segment then merged for better audio. Without ffmpeg, it's one continuous generation.
 
-## Config
-
-Edit `config.yaml` to change LLM settings:
-
-```yaml
-llm:
-  base_url: "http://localhost:58080/v1"  # Your LLM endpoint
-  api_key: "local"                       # API key
-  model: "gpt-4o-mini"                   # Model name
-  temperature: 0.3                       # 0 = deterministic, 1 = creative
-
-chunking:
-  max_tokens: 8000           # Max tokens per chunk
-
-synthesis:
-  temperature: 0.4           # Higher for creative synthesis
-  context_window: 64000      # Your LLM's context window
-
-output:
-  generate_html: true        # Export HTML after synthesis
-  generate_final: true       # Run final merge step
-```
-
-## Prompts
-
-Three prompt files at the root — edit them anytime:
-
-| File | What it does |
-|------|-------------|
-| `distill_chunk_prompt.md` | Distills each chunk individually |
-| `distill_group_prompt.md` | Merges chunks into thematic groups |
-| `distill_final_prompt.md` | Merges groups into final synthesis |
-
-## Output Structure
-
-```
-output/
-└── My_Book/
-    ├── chunks/
-    │   ├── 000_Introduction.md
-    │   ├── 001_Chapter_One.md
-    │   ├── ...
-    │   └── MANIFEST.md
-    ├── distilled/
-    │   ├── 000_distilled.md
-    │   ├── 001_distilled.md
-    │   └── ...
-    ├── synthesis/
-    │   ├── group_01.md
-    │   ├── group_02.md
-    │   └── ...
-    ├── final.md
-    ├── index.html
-    └── audiobook/
-        ├── groups.mp3
-        └── final.mp3
-```
-
-## HTML Viewer
-
-The exported `index.html` embeds raw markdown and uses [marked.js](https://marked.js.org/) from CDN for client-side rendering. Dark-themed, responsive, handles tables/code/lists perfectly.
-
-- **⚡ Short Version** — Final synthesis, clean and scannable
-- **📖 Long Version** — Group distillations as expandable accordions (lazy-rendered on open)
-
-Open it in any browser. Single file, just needs internet for CDN. Share it anywhere.
-
-## Resumability
-
-Everything is resumable. Kill the process anytime (Ctrl+C) and re-run — it picks up exactly where it left off:
-
-- Chunks already created → skipped
-- Distillations already done → skipped
-- Groups already synthesized → skipped
-- Final already merged → skipped
+---
 
 ## Supported Input
 
@@ -242,6 +220,9 @@ Everything is resumable. Kill the process anytime (Ctrl+C) and re-run — it pic
 | `.epub` | Auto-converts via pandoc (must be installed) |
 | `.txt` | Direct processing |
 
+For EPUB support, install [pandoc](https://pandoc.org/installing.html).
+For audio merging, install [ffmpeg](https://ffmpeg.org/download.html).
+
 ## Dependencies
 
 ```bash
@@ -249,11 +230,11 @@ Everything is resumable. Kill the process anytime (Ctrl+C) and re-run — it pic
 openai, pyyaml, tiktoken, pydantic, edge-tts
 ```
 
-For EPUB support, install [pandoc](https://pandoc.org/installing.html).
-For audio merging, install [ffmpeg](https://ffmpeg.org/download.html).
+---
 
-# 📚 BookConvert — Final Structure
-```text
+## Project Structure
+
+```
 Rixie/
 ├── input/                          ← Drop books here
 ├── output/
@@ -267,7 +248,7 @@ Rixie/
 │           ├── groups.mp3
 │           └── final.mp3
 │
-├── config.yaml                     ← LLM settings
+├── config.yaml                     ← LLM settings (edit this)
 ├── distill_chunk_prompt.md         ← Per-chunk prompt
 ├── distill_group_prompt.md         ← Per-group prompt
 ├── distill_final_prompt.md         ← Final merge prompt

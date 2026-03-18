@@ -1,12 +1,13 @@
 """
 BookConvert - Synthesizer
-Groups distillations → Final merge.
+Groups distillations → Final readable synthesis.
 
 Flow:
   distilled/*.md  →  synthesis/group_N.md  →  output/final.md
 
 Max context window controls how many chunks per group.
-Final merge is optional (--final flag).
+Final synthesis is optional (--final flag) and always runs the
+readability prompt, even for a single group.
 """
 
 import re
@@ -158,7 +159,7 @@ def synthesize_book(
 
     print(f"\n   📄 {len(group_files)} group distillations in {synthesis_dir.name}/")
 
-    # ─── Final merge (optional) ──────────────────────────────
+    # ─── Final readable synthesis (optional) ──────────────────
     final_done = False
     final_path = output_dir / "final.md"
 
@@ -167,13 +168,6 @@ def synthesize_book(
         if final_path.exists():
             print(f"\n   🔄 Final merge already exists → {final_path.name} (skipped)")
             final_done = True
-        # If only 1 group, skip rephrasing — just use it as-is
-        elif len(group_files) == 1:
-            print(f"\n   🔄 Single group → using directly (no re-synthesis)")
-            content = group_files[0].read_text(encoding="utf-8")
-            final_path.write_text(content, encoding="utf-8")
-            final_done = True
-            print(f"      ✅ Copied → {final_path.name}")
         else:
             print(f"\n   🔄 Final merge...")
 

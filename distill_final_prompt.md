@@ -1,47 +1,96 @@
-# FINAL SYNTHESIS PROMPT
+# FINAL READABLE SYNTHESIS
 
-You are creating the FINAL distillation of a complete book.
+You are receiving a compressed, structured distillation of a book — already processed through chunk extraction and group synthesis. It is dense, accurate, and hard to read.
 
-The input contains multiple group distillations. Each group covers a different thematic section of the book. These groups were created by first distilling individual chunks, then merging chunks into thematic groups. Now you merge the groups into ONE document.
+Your job is to **transform it into a coherent, human-readable article** that someone could actually enjoy reading and learn from — like a well-written Wikipedia entry or a great explainer essay.
 
-## YOUR TASK
+This is not another round of compression. This is **translation from structured knowledge into flowing understanding**.
 
-Create the definitive, compressed mental model of this book.
+## Core Directives
 
-### Rules:
-- **Organize by theme, not chapter order**: The goal is a conceptual map, not a book summary. Cluster related ideas regardless of where they appeared.
-- **Ruthless deduplication**: If the same concept appears in 3 groups, it appears once in your output in its strongest form.
-- **Hierarchy of impact**: Lead with the highest-leverage insights. If one idea is 10x more useful than another, make that obvious.
-- **Cross-group synthesis**: Your unique value is connecting ideas that were separated by chapter boundaries. What patterns emerge when you see ALL the groups together?
-- **Note gaps and contradictions**: If group A says X and group B says the opposite, call it out. Resolution is better than glossing over.
-- **Do NOT add new ideas**: Work only with what's provided.
-- **Compression is king**: Every sentence must earn its place. If it doesn't change how someone thinks or acts, cut it.
+### 1. CONNECT THE DOTS
+- Your primary job is to show how ideas *relate* to each other, not just list them.
+- Add transitional language between concepts: "This connects to...", "Building on this...", "This is why...", "Put differently..."
+- When a concept depends on another, *say so explicitly*. Readers need the thread.
+- Think of the output as a **narrative of understanding**, not a bullet-point dump.
 
-### Output Format:
+### 2. PRIORITIZE FLOW OVER DENSITY
+- Each section should read like it belongs next to the previous one.
+- Use the "because/therefore/so" chain — make causality visible.
+- It's better to use 30% more words if it means someone actually understands the connection between Principle 1 and Principle 2.
+- If an idea is abstract, **bridge it to something concrete** before moving on.
 
-```
-# Complete Distillation
+### 3. SIMPLIFY THE LANGUAGE
+- Replace jargon with plain language. If you must use a technical term, define it inline on first use.
+- Use **analogies** where they illuminate — not as filler, but as bridges. ("Think of it like...", "It works the way a ___ does when...")
+- Short sentences for complex ideas. Longer sentences only for flow and connection.
+- If a sentence would confuse your smart friend who hasn't read the book, rewrite it.
 
-## CORE THESIS
-[The ONE sentence that captures the entire book's argument.]
+### 4. MAKE THE STRUCTURE WORK FOR HUMANS
+- Use clear, descriptive section headers that tell you what you'll learn.
+- Opening section should set up the "big picture" in 2-4 sentences — what is this book *about*, and why does it matter?
+- End with a "So What?" section that ties everything together and makes the reader feel like they gained something real.
 
-## THE ARCHITECTURE
-[3-5 macro-modules that organize all the book's ideas. This is the mental map.]
+## Input You're Working With
 
-## RECEPTORS ENABLED
-[All lenses/models/concepts, organized by theme. Deduplicated. Maximum 10-15 total.]
+You'll receive a structured distillation containing:
+- **CENTRAL THESIS** — the core argument
+- **CORE ARCHITECTURE** — the main principles
+- **WHAT I CAN SEE NOW** — perception upgrades
+- **WHAT I CAN DO NOW** — actionable heuristics  
+- **WHAT I CAN REJECT NOW** — bullshit detection
+- **UNRESOLVED TENSIONS** — open conflicts
+- **SEED PRINCIPLE** — the regenerative kernel
+- **COLD STORAGE** — dense summary paragraph
 
-## OPERATIONS ENABLED
-[All actionable heuristics, organized by situation/domain. Maximum 10-15 total.]
+Your job is to **use all of this as raw material** to write something readable.
 
-## IMMUNE RESPONSES
-[All bullshit detection patterns. Maximum 8-10 total.]
+## Output Format
 
-## THE GENERATOR
-[The single seed principle from which you could regenerate the entire book.]
+Write a coherent article with these sections:
 
-## COLD STORAGE SYNTHESIS
-[One paragraph. The "if you forget everything else" paragraph. This should be sufficient to rebuild the mental model months later.]
-```
+---
 
-Output clean markdown. This is the final product. Make it count.
+### **The Big Picture** (2-4 sentences)
+What is this book's core claim? Why should I care? Set the stage in plain language.
+
+### **How It Works** (the main body)
+This is the bulk of your output. Write it as flowing paragraphs, not bullet points. 
+- Introduce the core principles with clear explanations and analogies.
+- Show how the principles connect and build on each other.
+- Include the perception upgrades ("lenses") naturally as you explain each principle.
+- Where relevant, mention boundaries — when does this apply, when doesn't it?
+
+### **What You Can Actually Do**
+Practical takeaways, written as clear actions. Not a bullet list — a short section that explains the heuristics in context. ("The key move here is...")
+
+### **What to Watch Out For**
+The common traps and bad patterns the book helps you spot. Write this as warnings with context — not just "Trap → Flag → Limit" but *why* these traps exist and *how* to spot them.
+
+### **The One Thing to Remember**
+The seed principle, rewritten as a memorable, self-contained idea. One paragraph max. This should feel like the "elevator pitch" version of the entire book.
+
+### **Tensions & Limits**
+Honest caveats. What's unresolved? What might this framework miss? Where does it break? Be direct but fair.
+
+---
+
+## Style Guide
+
+- **Tone**: Warm, clear, confident. Like a smart friend explaining something they found fascinating. Not academic. Not dumbed-down.
+- **Analogies**: Use them. They're the fastest path from abstract to understood. One per major concept is ideal.
+- **Transitions**: Every paragraph should connect to the previous one. If you can remove a paragraph and nothing breaks, you didn't connect it well enough.
+- **Density**: Aim for *understanding density*, not *word density*. A reader should finish each section thinking "ah, I get it" — not "that was a lot of words."
+- **Length**: Let it breathe. Quality and clarity over brevity. If a concept needs a paragraph to land properly, give it one.
+
+## Constraints
+
+- Do NOT just reformat the bullet points into paragraphs. Actually *rewrite* for flow and connection.
+- Do NOT add information not present in the source distillation. You're translating, not inventing.
+- Do NOT use the section names from the input as your section headers — the input structure is scaffolding, not the final shape.
+- DO use the analogies and plain language to make unfamiliar ideas feel accessible.
+- DO make the connections between ideas explicit — this is your primary value-add.
+
+---
+
+Now transform the following distillation into a readable, connected article:

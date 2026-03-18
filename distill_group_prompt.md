@@ -1,40 +1,62 @@
-# GROUP SYNTHESIS PROMPT
+# SYNTHESIS PROMPT
 
-You are synthesizing consecutive sections of a book into one unified distillation.
+You are combining multiple chunk-level distillations from the same source.
 
-The input contains multiple individually distilled analyses, each from a different part of the same chapter/section group. These distillations already extracted receptors, operations, immune responses, and seed principles from their respective chunks.
+Your job is not to repeat them. Your job is to compress them into one coherent system.
 
-## YOUR TASK
+## What to do
 
-MERGE into ONE coherent distillation that is greater than the sum of its parts.
+- Merge overlapping points that express the same idea in different words.
+- Separate core ideas from local examples, restatements, and minor side points.
+- Resolve apparent contradictions where possible.
+- If two chunks conflict and the conflict cannot be resolved from the evidence given, mark it clearly.
+- Prefer ideas that explain many other ideas over ideas that are merely repeated.
+- Preserve only insights that upgrade perception, action, or judgment.
+- Remove generic advice, motivational filler, and duplicate formulations.
 
-### Rules:
-- **Deduplicate ruthlessly**: If multiple chunks identified the same receptor or operation, merge them into the strongest version. Don't list the same idea twice.
-- **Fill gaps**: If chunk A has an operation that chunk B is missing, and chunk A provides the context for it, include it in the merged version.
-- **Connect the dots**: Look for relationships between ideas from different chunks. The whole point of group synthesis is to see connections that individual chunks couldn't reveal.
-- **Elevate, don't repeat**: The output should be MORE refined than any single input, not just a concatenation.
-- **Do NOT add new ideas**: Only work with what's in the inputs. If something seems missing, note it as a gap rather than inventing content.
-- **Maintain structure**: Use the same format (Core Thesis, Receptors, Operations, Immune Responses, Generator, Cold Storage).
+## Priorities
 
-### Output Format:
+When deciding what is central, rank by:
+1. Explanatory power: does this idea organize many others?
+2. Action value: does it change decisions or behavior?
+3. Detection value: does it help reject falsehoods or bad patterns?
+4. Recurrence: does it appear across multiple chunks?
+5. Specificity: is it concrete rather than vague?
 
-```
-CORE THESIS: [The unified thesis across all chunks in this group]
+## Output
 
-RECEPTORS ENABLED (The "What"):
-[Merged and deduplicated. Keep the best version of each concept.]
+**CENTRAL THESIS**
+One sentence that best captures the whole source.
 
-OPERATIONS ENABLED (The "How"):
-[Merged heuristics. If two chunks have similar triggers/actions, combine them.]
+**CORE ARCHITECTURE**
+- Principle 1: ...
+- Principle 2: ...
+- Principle 3: ...
+[Only the smallest set needed to reconstruct the whole system.]
 
-IMMUNE RESPONSES (The "Shield"):
-[Merged anti-patterns. Focus on the ones most relevant across all chunks.]
+**WHAT I CAN SEE NOW**
+- [Merged lenses only. No duplicates.]
 
-THE GENERATOR (Atomic Logic):
-[The seed principle that captures ALL chunks in this group.]
+**WHAT I CAN DO NOW**
+- Trigger → Action → Why it works
 
-THE "COLD STORAGE" SYNTHESIS:
-[One paragraph that captures the essence of this entire group.]
-```
+**WHAT I CAN REJECT NOW**
+- Trap → Red flag → Limit
 
-Output clean markdown only. Be ruthless about quality.
+**UNRESOLVED TENSIONS**
+- [Conflicts or ambiguities across chunks]
+
+**SEED PRINCIPLE**
+One sentence that can regenerate the whole model.
+
+**COLD STORAGE**
+One short paragraph that preserves maximum usable insight with minimum words.
+
+## Rules
+
+- Do not summarize chunk by chunk.
+- Do not preserve the original chunk structure.
+- Do not reward repetition.
+- Do not include ideas unless they are supported by the chunk outputs.
+- Use plain language.
+- Keep high information density.
