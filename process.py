@@ -11,7 +11,7 @@ Usage:
     python process.py --resume           # Resume where left off (default behavior)
 
 Directory structure:
-    input/                  → Drop books here (.md, .epub)
+    input/                  → Drop books here (.md, .epub, .pdf, .txt)
     output/{book_name}/
         ├── chunks/         → Smart chunks
         ├── distilled/      → Individual distillations
@@ -68,7 +68,7 @@ def sanitize_name(filename: str) -> str:
 def find_books(input_dir: Path) -> list[Path]:
     """Find all book files in input directory."""
     books = []
-    for ext in ["*.md", "*.epub", "*.txt"]:
+    for ext in ["*.md", "*.epub", "*.txt", "*.pdf"]:
         books.extend(input_dir.glob(ext))
     return sorted(books)
 
@@ -86,6 +86,13 @@ def process_book(book_path: Path, config: dict) -> bool:
     # Convert EPUB to markdown if needed
     if book_path.suffix.lower() == ".epub":
         md_path = _convert_epub(book_path, book_dir)
+        if not md_path:
+            return False
+        book_path = md_path
+
+    # Convert PDF to markdown if needed
+    if book_path.suffix.lower() == ".pdf":
+        md_path = _convert_pdf(book_path, book_dir)
         if not md_path:
             return False
         book_path = md_path
@@ -232,6 +239,70 @@ def _convert_epub(epub_path: Path, book_dir: Path) -> Path | None:
 
     print(
         f"   ❌ Could not convert EPUB. Install pandoc: https://pandoc.org/installing.html"
+    )
+    return None
+
+
+def _convert_pdf(pdf_path: Path, book_dir: Path) -> Path | None:
+    """Convert PDF to markdown using pypdf or pandoc."""
+    md_path = book_dir / f"{pdf_path.stem}.md"
+
+    # Check if already converted
+    if md_path.exists():
+        print(f"   ✅ Already converted: {md_path.name}")
+        return md_path
+
+    # Try pypdf first (faster, no external dependencies)
+    try:
+        print(f"   📕 Converting PDF → Markdown (pypdf)...")
+        book_dir.mkdir(parents=True, exist_ok=True)
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(pdf_path))
+        text_content = []
+
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+            if page_text and page_text.strip():
+                # Add page separator for multi-page PDFs
+                if i > 0:
+                    text_content.append(f"\n\n---\n\n")
+                text_content.append(page_text)
+
+        if text_content:
+            md_content = "".join(text_content)
+            md_path.write_text(md_content, encoding="utf-8")
+            print(f"   ✅ Converted: {md_path.name} ({md_path.stat().st_size:,} bytes)")
+            return md_path
+        else:
+            print(f"   ⚠️  No text extracted from PDF")
+    except ImportError:
+        print(f"   ⚠️  pypdf not installed, trying pandoc...")
+    except Exception as e:
+        print(f"   ⚠️  pypdf failed: {e}")
+
+    # Fallback: pandoc
+    import subprocess
+
+    try:
+        print(f"   📕 Converting PDF → Markdown (pandoc)...")
+        result = subprocess.run(
+            ["pandoc", str(pdf_path), "-t", "markdown", "-o", str(md_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0 and md_path.exists():
+            print(f"   ✅ Converted: {md_path.name} ({md_path.stat().st_size:,} bytes)")
+            return md_path
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"   ⚠️  Pandoc failed: {e}")
+
+    print(
+        f"   ❌ Could not convert PDF. Install pypdf or pandoc: https://pypdf.readthedocs.io/"
     )
     return None
 

@@ -6,7 +6,7 @@ Too long did not Rixie
 
 **Throw books in. Get distilled knowledge out.**
 
-Rixie is an LLM-powered book distiller. It reads your book (Markdown, EPUB, or text), breaks it into chunks, and runs each chunk through an LLM that extracts only the *functional* knowledge — mental models, actionable heuristics, bullshit detectors, and the one seed principle that rebuilds the whole argument.
+Rixie is an LLM-powered book distiller. It reads your book (Markdown, EPUB, PDF, or text), breaks it into chunks, and runs each chunk through an LLM that extracts only the *functional* knowledge — mental models, actionable heuristics, bullshit detectors, and the one seed principle that rebuilds the whole argument.
 
 The output isn't a summary. It's a **cognitive upgrade** — what the book makes you *capable of*, not what it said.
 
