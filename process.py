@@ -6,6 +6,7 @@ Usage:
     python process.py                    # Process all books in input/
     python process.py input/book.md      # Process a specific book
     python process.py --no-html          # Skip HTML export
+    python process.py --no-epub          # Skip EPUB export
     python process.py --no-final         # Skip final merge step
     python process.py --resume           # Resume where left off (default behavior)
 
@@ -16,7 +17,8 @@ Directory structure:
         ├── distilled/      → Individual distillations
         ├── synthesis/      → Group distillations
         ├── final.md        → Final synthesis (if enabled)
-        └── {book_name}.html  → HTML export (if enabled)
+        ├── {book_name}.html  → HTML export (if enabled)
+        └── {book_name}.epub  → EPUB export (if enabled)
 
 Config:
     config.yaml             → LLM params (base_url, api_key, model, temperature)
@@ -37,6 +39,7 @@ from chunker import chunk_book
 from distiller import distill_book, load_prompt as load_distill_prompt
 from synthesizer import synthesize_book, load_prompt as load_synth_prompt
 from export_html import export_html
+from export_epub import export_epub
 
 
 INPUT_DIR = Path("input")
@@ -98,12 +101,15 @@ def process_book(book_path: Path, config: dict) -> bool:
     output_config = config.get("output", {})
     do_final = output_config.get("generate_final", True)
     do_html = output_config.get("generate_html", True)
+    do_epub = output_config.get("generate_epub", True)
 
     # CLI overrides
     if "--no-final" in sys.argv:
         do_final = False
     if "--no-html" in sys.argv:
         do_html = False
+    if "--no-epub" in sys.argv:
+        do_epub = False
 
     # ─── Step 1: Chunk ──────────────────────────────────────
     print(f"\n{'─' * 40}")
@@ -148,12 +154,23 @@ def process_book(book_path: Path, config: dict) -> bool:
     # ─── Step 4: HTML Export ─────────────────────────────────
     if do_html:
         print(f"\n{'─' * 40}")
-        print("STEP 4/4: HTML EXPORT")
+        print("STEP 4/5: HTML EXPORT")
         print(f"{'─' * 40}")
         export_html(book_dir, book_name, do_final)
     else:
         print(f"\n{'─' * 40}")
-        print("STEP 4/4: HTML EXPORT (skipped)")
+        print("STEP 4/5: HTML EXPORT (skipped)")
+        print(f"{'─' * 40}")
+
+    # ─── Step 5: EPUB Export ─────────────────────────────────
+    if do_epub:
+        print(f"\n{'─' * 40}")
+        print("STEP 5/5: EPUB EXPORT")
+        print(f"{'─' * 40}")
+        export_epub(book_dir, book_name, do_final)
+    else:
+        print(f"\n{'─' * 40}")
+        print("STEP 5/5: EPUB EXPORT (skipped)")
         print(f"{'─' * 40}")
 
     # Summary
@@ -166,6 +183,8 @@ def process_book(book_path: Path, config: dict) -> bool:
         print(f"   Final:     {book_dir / 'final.md'}")
     if do_html:
         print(f"   HTML:      {book_dir / f'{book_name}.html'}")
+    if do_epub:
+        print(f"   EPUB:      {book_dir / f'{book_name}.epub'}")
     print(f"{'═' * 60}")
     return True
 
