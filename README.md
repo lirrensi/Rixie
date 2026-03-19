@@ -66,9 +66,11 @@ Put your book in the `input/` folder:
 cp my_book.md input/
 # or
 cp my_book.epub input/
+# or
+cp my_book.pdf input/
 ```
 
-Supported formats: `.md`, `.txt`, `.epub` (requires [pandoc](https://pandoc.org/installing.html)).
+Supported formats: `.md`, `.txt`, `.epub` (requires [pandoc](https://pandoc.org/installing.html)), `.pdf` (uses pypdf, no external dependencies).
 
 ### 4. Run It
 
@@ -88,9 +90,31 @@ output/
     ├── synthesis/       # Level 2: Group distillations (thematic clusters)
     ├── final.md         # Level 3: Readable article (2-min vibe check)
     ├── my_book.html     # Beautiful HTML viewer (dark theme, tabs, accordions)
+    ├── my_book.epub     # EPUB e-reader version (linear structure, standard nav)
 ```
 
-Open the `.html` file in a browser. Done.
+Open the `.html` file in a browser or the `.epub` in your favorite e-reader. Done.
+
+### Export Options
+
+**HTML Export** (default: enabled)
+- Beautiful dark theme with tabbed interface
+- Three sections: Short Version, Groups, All Chunks
+- Lazy-loaded markdown rendering
+- Theme switcher (White, Paper, Dusk, OLED, Dimmed, Midnight)
+
+**EPUB Export** (default: enabled)
+- Standard EPUB3 format with proper navigation
+- Linear structure with three sections
+- Works in any e-reader (Kindle, Apple Books, Kobo, etc.)
+- Styled with clean typography
+
+**Skip exports:**
+```bash
+uv run python process.py --no-html    # Skip HTML export
+uv run python process.py --no-epub    # Skip EPUB export
+uv run python process.py --no-html --no-epub  # Skip both
+```
 
 ### (Optional) Tune the Prompts
 
@@ -154,6 +178,7 @@ uv run python process.py
 ```bash
 uv run python process.py input/my_book.md
 uv run python process.py input/my_book.epub
+uv run python process.py input/my_book.pdf
 ```
 
 ### Skip final merge step
@@ -235,6 +260,7 @@ Or use any [edge-tts voice name](https://github.com/rany2/edge-tts#supported-voi
 |--------|--------|
 | `.md` | Direct processing |
 | `.epub` | Auto-converts via pandoc (must be installed) |
+| `.pdf` | Auto-converts via pypdf (no external dependencies) |
 | `.txt` | Direct processing |
 
 For EPUB support, install [pandoc](https://pandoc.org/installing.html).
@@ -244,7 +270,7 @@ For audio merging, install [ffmpeg](https://ffmpeg.org/download.html).
 
 ```bash
 # Managed via uv (auto-installed)
-openai, pyyaml, tiktoken, pydantic, edge-tts
+openai, pyyaml, tiktoken, pydantic, edge-tts, ebooklib, markdown, pypdf
 ```
 
 ---
@@ -275,5 +301,6 @@ Rixie/
 ├── distiller.py                    ← LLM distillation
 ├── synthesizer.py                  ← Group + final synthesis
 ├── export_html.py                  ← HTML export (marked.js)
+├── export_epub.py                  ← EPUB export (ebooklib)
 └── audiobook.py                    ← 🎧 Audiobook generator
 ```
