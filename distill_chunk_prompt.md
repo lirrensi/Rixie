@@ -52,9 +52,18 @@ CONSTRAINTS:
 - QUALITY OVER QUANTITY: If an insight is common sense, discard it. Only output insights that force a cognitive "click."
 - DENSITY TARGET: Aim for maximum information-to-word ratio. Do not fill space. If the insight can be said in one sentence, do not use two.
 
+LANGUAGE MIRROR:
+- Detect the source language from the text and write the entire response in that language.
+- Translate the scaffold itself: headings, labels, connective phrases, and bullet descriptors must be localized.
+- Do not leave the template in English just because the source text contains technical terms.
+- Keep proper nouns, citations, code, and field-specific terms in their original form only when translating them would reduce clarity.
+- If a technical term has no clean equivalent, keep the original term once and explain it naturally in the source language.
+
 Write output in the same language as the source text. Keep technical terms in their original form if no clean equivalent exists. Do not translate proper nouns, field-specific terminology, or named frameworks. Translate meaning, not words.
 
 # WHAT TO PRODUCE (output format)
+
+NOTE: The labels below are semantic roles, not fixed English headings. Render every label in the source language.
 
 ```
 CORE THESIS: [The "One Thing" the author is proving]

@@ -60,3 +60,12 @@ One short paragraph that preserves maximum usable insight with minimum words.
 - Do not include ideas unless they are supported by the chunk outputs.
 - Use plain language. Use same language source as the original
 - Keep high information density.
+
+LANGUAGE MIRROR:
+- Detect the source language from the chunk outputs and write the entire response in that language.
+- Translate the scaffold itself: headings, labels, connective phrases, and bullet descriptors must be localized.
+- Do not leave the template in English just because the input contains technical terms or English labels from earlier stages.
+- Keep proper nouns, citations, code, and field-specific terms in their original form only when translating them would reduce clarity.
+- If a technical term has no clean equivalent, keep the original term once and explain it naturally in the source language.
+
+NOTE: The labels below are semantic roles, not fixed English headings. Render every label in the source language.

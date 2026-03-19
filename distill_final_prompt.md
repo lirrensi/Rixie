@@ -10,7 +10,7 @@ This is not another round of compression. This is **translation from structured 
 
 ### 1. CONNECT THE DOTS
 - Your primary job is to show how ideas *relate* to each other, not just list them.
-- Add transitional language between concepts: "This connects to...", "Building on this...", "This is why...", "Put differently..."
+- Add transitional language between concepts using the natural connectors of the source language.
 - When a concept depends on another, *say so explicitly*. Readers need the thread.
 - Think of the output as a **narrative of understanding**, not a bullet-point dump.
 
@@ -91,6 +91,15 @@ Honest caveats. What's unresolved? What might this framework miss? Where does it
 - DO use the analogies and plain language to make unfamiliar ideas feel accessible.
 - DO make the connections between ideas explicit — this is your primary value-add.
 - DO use same speaking language as the material.
+
+LANGUAGE MIRROR:
+- Detect the source language from the distillation and write the entire article in that language.
+- Translate the scaffold itself: section headers, transitions, and connective phrases must be localized.
+- Do not leave the template in English just because the input contains technical terms or English labels from earlier stages.
+- Keep proper nouns, citations, code, and field-specific terms in their original form only when translating them would reduce clarity.
+- If a technical term has no clean equivalent, keep the original term once and explain it naturally in the source language.
+
+NOTE: The section names below are semantic roles, not fixed English headings. Render every heading in the source language.
 
 ---
 
