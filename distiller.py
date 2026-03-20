@@ -7,6 +7,7 @@ Resumable: skips already-processed chunks.
 import re
 import time
 from pathlib import Path
+from typing import Optional
 from openai import OpenAI
 
 
@@ -35,11 +36,11 @@ def load_prompt(prompt_path: Path = Path("distill_chunk_prompt.md")) -> str:
 
 
 def get_processed_chunks(output_dir: Path) -> set:
-    """Get set of already processed chunk indices."""
+    """Get set of already processed chunk indices (successful only)."""
     processed = set()
     if output_dir.exists():
         for f in output_dir.glob("*.md"):
-            m = re.match(r"^(\d+)_", f.name)
+            m = re.match(r"^(\d+)_distilled\.md$", f.name)
             if m:
                 processed.add(int(m.group(1)))
     return processed
@@ -65,7 +66,52 @@ def distill_chunk(
             },
         ],
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content
+
+    # Check for None (model returned nothing)
+    if content is None:
+        finish_reason = response.choices[0].finish_reason
+        raise RuntimeError(
+            f"Model returned None content (finish_reason: {finish_reason})"
+        )
+
+    return content
+
+
+def validate_distillation(
+    text: str, min_lines: int = 5, min_chars: int = 200
+) -> Optional[str]:
+    """Validate that a distillation response is actually useful.
+
+    Returns None if valid, or an error description if not.
+    """
+    if not text or not text.strip():
+        return "Empty response from model"
+
+    stripped = text.strip()
+    lines = [l for l in stripped.split("\n") if l.strip()]
+
+    if len(lines) < min_lines:
+        return f"Only {len(lines)} non-empty lines (minimum: {min_lines})"
+
+    if len(stripped) < min_chars:
+        return f"Only {len(stripped)} characters (minimum: {min_chars})"
+
+    # Check for common error patterns the model might return
+    error_patterns = [
+        r"^I (can'?t|cannot|am unable)",
+        r"^Sorry,? I",
+        r"^Error:",
+        r"^Unable to",
+        r"^I apologize",
+        r"^The (text|content) (provided|given) (is|does)",
+    ]
+    first_line = lines[0].strip()
+    for pattern in error_patterns:
+        if re.match(pattern, first_line, re.IGNORECASE):
+            return f"Model returned error-like response: '{first_line[:80]}'"
+
+    return None
 
 
 def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) -> int:
@@ -101,8 +147,11 @@ def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) 
 
     total = len(to_process)
     newly_done = 0
+    errors = 0
     for i, chunk_file in enumerate(to_process, 1):
         m = re.match(r"^(\d+)_", chunk_file.name)
+        if not m:
+            continue
         idx = int(m.group(1))
 
         chunk_text = chunk_file.read_text(encoding="utf-8")
@@ -111,11 +160,30 @@ def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) 
 
         print(f"   [{i}/{total}] {title[:50]}...", end="", flush=True)
 
+        # Clean up any previous ERROR file for this chunk (we're retrying)
+        error_file = output_dir / f"{idx:03d}_ERROR.md"
+        if error_file.exists():
+            error_file.unlink()
+
         try:
             start = time.time()
             distilled = distill_chunk(
                 client, chunk_text, title, prompt, model, temperature
             )
+
+            # Validate the response — reject empty/useless garbage
+            validation_error = validate_distillation(distilled)
+            if validation_error:
+                elapsed = time.time() - start
+                print(f" ❌ {elapsed:.0f}s | {validation_error}")
+                error_file.write_text(
+                    f"# Validation Failed\n\n{validation_error}\n\n"
+                    f"## Raw Response\n\n```\n{distilled[:500]}\n```",
+                    encoding="utf-8",
+                )
+                errors += 1
+                continue
+
             elapsed = time.time() - start
 
             output_file = output_dir / f"{idx:03d}_distilled.md"
@@ -128,13 +196,18 @@ def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) 
             print(f" ✅ {elapsed:.0f}s | {lines} lines")
 
         except Exception as e:
-            print(f" ❌ {e}")
-            error_file = output_dir / f"{idx:03d}_ERROR.md"
-            error_file.write_text(f"# Error\n\n{e}", encoding="utf-8")
+            elapsed = time.time() - start
+            print(f" ❌ {elapsed:.0f}s | {e}")
+            error_file.write_text(
+                f"# Error\n\n{type(e).__name__}: {e}", encoding="utf-8"
+            )
+            errors += 1
 
         if i < total:
             time.sleep(0.5)
 
+    if errors:
+        print(f"\n   ⚠️  {errors} chunks failed — rerun to retry")
     print(f"\n   ✨ Distilled {newly_done} new chunks → {output_dir.name}/")
     return newly_done
 
