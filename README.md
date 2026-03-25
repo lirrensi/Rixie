@@ -2,6 +2,8 @@
 
 Too long did not Rixie
 
+# < this is older version where we do 3 separate distill parts, now considered outdated and not great >
+
 <img src="assets/rixie.jpg" alt="Rixie" width="100%">
 
 **Throw books in. Get distilled knowledge out.**
