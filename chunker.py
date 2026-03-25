@@ -2,13 +2,11 @@
 BookConvert - Smart Book Chunker
 Groups book sections into digestible chunks respecting natural boundaries.
 
-Strategy:
+Strategy (3-tier hierarchy):
 1. Parse all headings (h1, h2, h3)
-2. Identify "Part" markers as structural anchors
-3. Group sections between Part markers into logical units
-4. If a group exceeds max_tokens, split at h2 boundaries
-5. If still too big, split at paragraph boundaries
-6. If still too big, recursively halve
+2. Split on h1 boundaries — each chapter is its own unit (never merge chapters)
+3. If a chapter exceeds max_tokens, split by its h2 subsections
+4. If an h2 subsection is still too big, fall back to recursive token-based splitting
 """
 
 import re
@@ -147,25 +145,48 @@ class BookChunker:
             return True
         return False
 
-    def group_sections(self, sections: list[RawSection]) -> list[list[RawSection]]:
-        """Group sections into logical units based on Part markers and token counts."""
+    def group_into_chapters(self, sections: list[RawSection]) -> list[list[RawSection]]:
+        """Split sections into chapters by h1 boundaries.
+
+        h1 headings (including Part markers) are hard boundaries —
+        chapters are never merged, regardless of token count.
+        h2/h3 sections are kept as children of their parent chapter.
+        """
+        groups = []
+        current_group = []
+
+        for section in sections:
+            if self.is_trash_section(section):
+                continue
+
+            # h1 = new chapter (or Part marker). Start a new group.
+            if section.level == 1:
+                if current_group:
+                    groups.append(current_group)
+                current_group = [section]
+            else:
+                # h2/h3 — accumulate under current chapter
+                current_group.append(section)
+
+        if current_group:
+            groups.append(current_group)
+        return groups
+
+    def split_by_h2(self, sections: list[RawSection]) -> list[list[RawSection]]:
+        """Split a chapter's sections into sub-groups by h2 boundaries.
+
+        If the chapter header + first h2 subsection still exceeds max_tokens,
+        that sub-group will be passed to recursive_split later.
+        """
         groups = []
         current_group = []
         current_tokens = 0
 
         for section in sections:
-            if self.is_trash_section(section):
-                continue
             section_tokens = self.count_tokens(section.title + "\n" + section.content)
 
-            if self.is_part_marker(section):
-                if current_group:
-                    groups.append(current_group)
-                current_group = [section]
-                current_tokens = section_tokens
-                continue
-
-            if current_group and (current_tokens + section_tokens > self.max_tokens):
+            # h2 starts a new sub-group (unless it's the very first section, i.e. the chapter header)
+            if section.level == 2 and current_group:
                 groups.append(current_group)
                 current_group = [section]
                 current_tokens = section_tokens
@@ -237,8 +258,27 @@ class BookChunker:
         chunks.extend(self.recursive_split(second_half, f"{title} (2/2)", next_idx))
         return chunks
 
+    def _sections_to_text(self, sections: list[RawSection]) -> tuple[str, list[str]]:
+        """Combine sections into a single text block and collect titles."""
+        parts = []
+        titles = []
+        for section in sections:
+            heading = "#" * section.level + " " + section.title
+            if section.content:
+                parts.append(f"{heading}\n\n{section.content}")
+            else:
+                parts.append(heading)
+            titles.append(section.title)
+        return "\n\n".join(parts).strip(), titles
+
     def chunk_book(self, text: str) -> list[Chunk]:
-        """Main entry point: chunk a book into digestible pieces."""
+        """Main entry point: chunk a book into digestible pieces.
+
+        3-tier hierarchy:
+          1. Split on h1 boundaries (chapters never merge)
+          2. If chapter too big, split by h2 subsections
+          3. If h2 still too big, fall back to recursive token splitting
+        """
         sections = self.parse_sections(text)
         print(f"   📖 Parsed {len(sections)} raw sections")
 
@@ -247,47 +287,73 @@ class BookChunker:
             f"      Parts: {parts_found} | Chapters: {sum(1 for s in sections if s.level == 1 and not self.is_part_marker(s))} | Sub-sections: {sum(1 for s in sections if s.level == 2)}"
         )
 
-        groups = self.group_sections(sections)
-        print(f"   📦 Grouped into {len(groups)} logical units")
+        # Tier 1: split into chapters by h1
+        chapters = self.group_into_chapters(sections)
+        print(f"   📚 Split into {len(chapters)} chapters")
 
         chunks = []
         chunk_index = 0
 
-        for group in groups:
-            combined_parts = []
-            section_titles = []
-
-            for section in group:
-                if self.is_part_marker(section):
-                    combined_parts.append(f"# {section.title}")
-                    section_titles.append(section.title)
-                else:
-                    if section.content:
-                        combined_parts.append(section.content)
-                        section_titles.append(section.title)
-
-            combined_text = "\n\n".join(combined_parts).strip()
-            if not combined_text:
-                continue
-
-            title = group[0].title
+        for chapter_sections in chapters:
+            chapter_title = chapter_sections[0].title
+            combined_text, titles = self._sections_to_text(chapter_sections)
             tokens = self.count_tokens(combined_text)
 
             if tokens <= self.max_tokens:
+                # Chapter fits — one chunk
                 chunks.append(
                     Chunk(
                         text=combined_text,
-                        title=title,
+                        title=chapter_title,
                         token_count=tokens,
-                        section_titles=section_titles,
+                        section_titles=titles,
                         index=chunk_index,
                     )
                 )
                 chunk_index += 1
             else:
-                new_chunks = self.recursive_split(combined_text, title, chunk_index)
-                chunks.extend(new_chunks)
-                chunk_index += len(new_chunks)
+                # Tier 2: split by h2
+                h2_groups = self.split_by_h2(chapter_sections)
+                if len(h2_groups) > 1:
+                    print(
+                        f"   ✂️  Chapter '{chapter_title}' too big ({tokens:,} tokens) — split into {len(h2_groups)} h2 groups"
+                    )
+                    for h2_group in h2_groups:
+                        h2_text, h2_titles = self._sections_to_text(h2_group)
+                        h2_tokens = self.count_tokens(h2_text)
+                        h2_title = h2_group[0].title
+
+                        if h2_tokens <= self.max_tokens:
+                            chunks.append(
+                                Chunk(
+                                    text=h2_text,
+                                    title=h2_title,
+                                    token_count=h2_tokens,
+                                    section_titles=h2_titles,
+                                    index=chunk_index,
+                                )
+                            )
+                            chunk_index += 1
+                        else:
+                            # Tier 3: recursive token-based split
+                            print(
+                                f"      ✂️  Section '{h2_title}' still too big ({h2_tokens:,} tokens) — recursive split"
+                            )
+                            new_chunks = self.recursive_split(
+                                h2_text, h2_title, chunk_index
+                            )
+                            chunks.extend(new_chunks)
+                            chunk_index += len(new_chunks)
+                else:
+                    # No h2 subsections to split on — go straight to recursive
+                    print(
+                        f"   ✂️  Chapter '{chapter_title}' too big ({tokens:,} tokens) — no h2 to split on, recursive split"
+                    )
+                    new_chunks = self.recursive_split(
+                        combined_text, chapter_title, chunk_index
+                    )
+                    chunks.extend(new_chunks)
+                    chunk_index += len(new_chunks)
 
         total_tokens = sum(c.token_count for c in chunks)
         print(

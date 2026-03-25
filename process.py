@@ -66,11 +66,11 @@ def sanitize_name(filename: str) -> str:
 
 
 def find_books(input_dir: Path) -> list[Path]:
-    """Find all book files in input directory."""
+    """Find all book files in input directory, sorted alphabetically."""
     books = []
     for ext in ["*.md", "*.epub", "*.txt", "*.pdf"]:
         books.extend(input_dir.glob(ext))
-    return sorted(books)
+    return sorted(books, key=lambda p: p.name.lower())
 
 
 def process_book(book_path: Path, config: dict) -> bool:
@@ -341,7 +341,7 @@ def main():
     specific_books = [Path(a) for a in sys.argv[1:] if not a.startswith("--")]
 
     if specific_books:
-        books = specific_books
+        books = sorted(specific_books, key=lambda p: p.name.lower())
     else:
         books = find_books(INPUT_DIR)
 
