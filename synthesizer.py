@@ -1,13 +1,12 @@
 """
 BookConvert - Synthesizer
-Groups distillations → Final readable synthesis.
+Takes distilled lists → concatenates → splits → summarizes → final output.
 
 Flow:
-  distilled/*.md  →  synthesis/group_N.md  →  output/final.md
-
-Group size targets ~group_target_tokens output (configurable).
-Context window is the hard limit, not the target.
-Final synthesis is optional (--final flag).
+  Step 2: distilled/*.md  →  combined.md          (mechanical concat)
+  Step 3: combined.md     →  split chunks         (token-based, newline-aware)
+          each chunk      →  LLM with final_prompt
+          results         →  final.md              (concat summaries)
 """
 
 import re
@@ -15,6 +14,13 @@ import math
 import time
 from pathlib import Path
 from openai import OpenAI
+
+try:
+    import tiktoken
+
+    _encoder = tiktoken.encoding_for_model("gpt-4o-mini")
+except ImportError:
+    _encoder = None
 
 
 def load_config(config_path: Path = Path("config.yaml")) -> dict:
@@ -32,28 +38,94 @@ def load_prompt(prompt_path: Path) -> str:
     raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
 
-def est_tokens(text: str) -> int:
+def count_tokens(text: str) -> int:
+    """Count tokens precisely (tiktoken) or estimate (chars/4)."""
+    if _encoder:
+        return len(_encoder.encode(text))
     return len(text) // 4
 
 
 def load_distilled(distilled_dir: Path) -> list[dict]:
-    """Load all distilled chunk files."""
+    """Load all distilled chunk files, sorted by index."""
     chunks = []
     for f in sorted(distilled_dir.glob("*_distilled.md")):
         m = re.match(r"^(\d+)_", f.name)
         if m:
             idx = int(m.group(1))
             text = f.read_text(encoding="utf-8")
-            body = re.sub(r"^---.*?---\s*", "", text, flags=re.DOTALL)
+            body = re.sub(r"^---.*?---\s*", "", text, flags=re.DOTALL).strip()
             title = re.search(r"title:\s*(.+)", text)
             chunks.append(
                 {
                     "idx": idx,
                     "title": title.group(1).strip() if title else f.stem,
                     "text": body,
-                    "tokens": est_tokens(body),
+                    "tokens": count_tokens(body),
                 }
             )
+    return chunks
+
+
+def concat_distilled(chunks: list[dict], output_path: Path) -> str:
+    """Concatenate all distilled lists into a single file.
+
+    This is pure mechanical concat — no LLM, no transformation.
+    Each chunk's body (already a list from distillation) is appended.
+    """
+    parts = []
+    for c in chunks:
+        parts.append(c["text"])
+
+    combined = "\n\n".join(parts)
+    output_path.write_text(combined, encoding="utf-8")
+
+    total_tokens = count_tokens(combined)
+    print(f"   📄 Combined {len(chunks)} distilled lists → {output_path.name}")
+    print(f"      {total_tokens:,} tokens, {len(combined):,} chars")
+    return combined
+
+
+def split_by_tokens(
+    text: str, max_tokens: int, prompt_tokens: int = 2000, response_reserve: int = 8000
+) -> list[str]:
+    """Split text into chunks that fit max_tokens, respecting line boundaries.
+
+    Strategy:
+      1. Split into lines
+      2. Accumulate lines until we hit the token budget
+      3. At the boundary, start a new chunk
+      4. If a single line exceeds budget, it becomes its own chunk (last resort)
+    """
+    usable = max_tokens - prompt_tokens - response_reserve
+    lines = text.split("\n")
+    total_tokens = count_tokens(text)
+
+    if total_tokens <= usable:
+        return [text]
+
+    # How many chunks do we need?
+    num_chunks = math.ceil(total_tokens / usable)
+    target_per_chunk = total_tokens // num_chunks
+
+    chunks = []
+    current_lines = []
+    current_tokens = 0
+
+    for line in lines:
+        line_tokens = count_tokens(line + "\n")
+
+        # If adding this line would exceed budget, start new chunk
+        if current_lines and (current_tokens + line_tokens > usable):
+            chunks.append("\n".join(current_lines))
+            current_lines = [line]
+            current_tokens = line_tokens
+        else:
+            current_lines.append(line)
+            current_tokens += line_tokens
+
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+
     return chunks
 
 
@@ -68,7 +140,12 @@ def run_llm(
             {"role": "user", "content": text},
         ],
     )
-    return r.choices[0].message.content
+    content: str | None = r.choices[0].message.content
+    if content is None:
+        raise RuntimeError(
+            f"Model returned None content (finish_reason: {r.choices[0].finish_reason})"
+        )
+    return str(content)
 
 
 def synthesize_book(
@@ -76,13 +153,12 @@ def synthesize_book(
     synthesis_dir: Path,
     output_dir: Path,
     config: dict,
-    group_prompt: str,
     final_prompt: str,
     do_final: bool = False,
 ) -> dict:
     """
-    Run group synthesis + optional final merge.
-    Returns dict with stats.
+    Step 2: Concatenate all distilled lists into one file.
+    Step 3: Split combined file → summarize each chunk → concatenate results.
     """
     llm = config.get("llm", {})
     synth = config.get("synthesis", {})
@@ -94,116 +170,101 @@ def synthesize_book(
     context_window = synth.get("context_window", 64000)
     prompt_overhead = synth.get("prompt_overhead", 2000)
     response_reserve = synth.get("response_reserve", 8000)
-    usable = context_window - prompt_overhead - response_reserve
-    group_target = synth.get("group_target_tokens", 8000)
 
     client = OpenAI(base_url=base_url, api_key=api_key)
     synthesis_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # ─── Step 2: Concatenate distilled lists ──────────────────
     chunks = load_distilled(distilled_dir)
     print(f"   📚 {len(chunks)} distilled chunks")
 
     if not chunks:
-        return {"chunks": 0, "groups": 0, "final": False}
+        return {"chunks": 0, "combined": False, "final": False}
 
-    # Auto-calculate group size: pack as many distilled chunks as fit
-    # in ~group_target tokens (same logic as chunking).
-    avg = sum(c["tokens"] for c in chunks) / len(chunks)
-    group_size = max(1, int(group_target / avg))
-    num_groups = math.ceil(len(chunks) / group_size)
+    combined_path = synthesis_dir / "combined.md"
 
-    print(f"   Avg: {avg:.0f} tok/chunk | Target: ~{group_target:,} tok/group")
-    print(f"   → {group_size} chunks/group → {num_groups} groups\n")
+    if combined_path.exists():
+        combined = combined_path.read_text(encoding="utf-8")
+        print(
+            f"   📄 Combined already exists → {combined_path.name} "
+            f"({count_tokens(combined):,} tokens, skipped)"
+        )
+    else:
+        combined = concat_distilled(chunks, combined_path)
 
-    # ─── Group distillation ──────────────────────────────────
-    group_files = []
-    existing_groups = sorted(synthesis_dir.glob("group_*.md"))
-    existing_group_count = len(existing_groups)
-
-    for g in range(num_groups):
-        group_num = g + 1
-        group_file = synthesis_dir / f"group_{group_num:02d}.md"
-
-        # Check if already exists (resumability)
-        if group_file.exists():
-            print(
-                f"   [{group_num}/{num_groups}] Already exists → {group_file.name} (skipped)"
-            )
-            group_files.append(group_file)
-            continue
-
-        start = g * group_size
-        end = min(start + group_size, len(chunks))
-        group = chunks[start:end]
-
-        titles = [c["title"] for c in group]
-        tok = sum(c["tokens"] for c in group)
-        print(f"   [{group_num}/{num_groups}] {titles[0][:30]} ... {titles[-1][:30]}")
-        print(f"              {len(group)} chunks, ~{tok:,} tokens")
-
-        combined = "\n\n".join(f"### {c['title']}\n{c['text']}" for c in group)
-
-        try:
-            t = time.time()
-            result = run_llm(client, combined, group_prompt, model, temperature)
-            elapsed = time.time() - t
-
-            group_file.write_text(result, encoding="utf-8")
-            group_files.append(group_file)
-
-            lines = len(result.split("\n"))
-            print(
-                f"              ✅ {elapsed:.0f}s | {lines} lines → {group_file.name}"
-            )
-        except Exception as e:
-            print(f"              ❌ {e}")
-
-    print(f"\n   📄 {len(group_files)} group distillations in {synthesis_dir.name}/")
-
-    # ─── Final readable synthesis (optional) ──────────────────
+    # ─── Step 3: Split + Summarize ────────────────────────────
     final_done = False
     final_path = output_dir / "final.md"
 
-    if do_final:
-        # Check if final already exists
-        if final_path.exists():
-            print(f"\n   🔄 Final merge already exists → {final_path.name} (skipped)")
-            final_done = True
-        else:
-            print(f"\n   🔄 Final merge...")
+    if not do_final:
+        return {"chunks": len(chunks), "combined": True, "final": False}
 
-            combined = "\n\n---\n\n".join(
-                f"## Group {i + 1}\n{f.read_text(encoding='utf-8')}"
-                for i, f in enumerate(group_files)
+    if final_path.exists():
+        print(f"\n   🔄 Final already exists → {final_path.name} (skipped)")
+        return {"chunks": len(chunks), "combined": True, "final": True}
+
+    print(f"\n   🔄 Final synthesis...")
+
+    combined_tokens = count_tokens(combined)
+    usable = context_window - prompt_overhead - response_reserve
+    print(f"      Combined: {combined_tokens:,} tokens | Usable per pass: {usable:,}")
+
+    if combined_tokens <= usable:
+        # Fits in one pass — just send it
+        print(f"      Fits in one pass ✨")
+        try:
+            t = time.time()
+            result = run_llm(client, combined, final_prompt, model, temperature)
+            elapsed = time.time() - t
+            print(f"      ✅ {elapsed:.0f}s | {len(result.split(chr(10)))} lines")
+        except Exception as e:
+            print(f"      ❌ {e}")
+            return {"chunks": len(chunks), "combined": True, "final": False}
+    else:
+        # Split into N chunks, summarize each, concatenate
+        parts = split_by_tokens(
+            combined, context_window, prompt_overhead, response_reserve
+        )
+        num_parts = len(parts)
+        print(f"      Split into {num_parts} passes")
+
+        summaries = []
+        for i, part in enumerate(parts, 1):
+            part_tokens = count_tokens(part)
+            print(
+                f"      [{i}/{num_parts}] {part_tokens:,} tokens...",
+                end="",
+                flush=True,
             )
+            try:
+                t = time.time()
+                summary = run_llm(client, part, final_prompt, model, temperature)
+                elapsed = time.time() - t
+                summaries.append(summary)
+                print(f" ✅ {elapsed:.0f}s")
+            except Exception as e:
+                print(f" ❌ {e}")
 
-            combined_tok = est_tokens(combined)
-            print(f"      Combined: ~{combined_tok:,} tokens (limit: {usable:,})")
+        if not summaries:
+            print(f"      ❌ All passes failed")
+            return {"chunks": len(chunks), "combined": True, "final": False}
 
-            if combined_tok > usable:
-                print(f"      ⚠️  Too large! Increase context_window in config.yaml.")
-            else:
-                try:
-                    t = time.time()
-                    result = run_llm(client, combined, final_prompt, model, temperature)
-                    elapsed = time.time() - t
+        result = "\n\n".join(summaries)
+        print(
+            f"      📦 {num_parts} summaries concatenated → {count_tokens(result):,} tokens"
+        )
 
-                    # Derive book name from directory
-                    book_name = output_dir.name.replace("_", " ")
-                    final_output = f"# {book_name}\n\n{result}"
-
-                    final_path.write_text(final_output, encoding="utf-8")
-                    final_done = True
-                    print(
-                        f"      ✅ {elapsed:.0f}s | {len(result.split(chr(10)))} lines → {final_path.name}"
-                    )
-                except Exception as e:
-                    print(f"      ❌ {e}")
+    # Write final output
+    book_name = output_dir.name.replace("_", " ")
+    final_output = f"# {book_name}\n\n{result}"
+    final_path.write_text(final_output, encoding="utf-8")
+    final_done = True
+    print(f"      💾 Saved → {final_path.name}")
 
     return {
         "chunks": len(chunks),
-        "groups": len(group_files),
+        "combined": True,
         "final": final_done,
     }
 
@@ -212,7 +273,6 @@ if __name__ == "__main__":
     import sys
 
     config = load_config()
-    group_prompt = load_prompt(Path("distill_group_prompt.md"))
     final_prompt = load_prompt(Path("distill_final_prompt.md"))
 
     do_final = "--final" in sys.argv
@@ -241,7 +301,6 @@ if __name__ == "__main__":
         synthesis_dir,
         output_dir,
         config,
-        group_prompt,
         final_prompt,
         do_final,
     )

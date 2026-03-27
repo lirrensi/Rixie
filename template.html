@@ -130,7 +130,7 @@
 
 <div class="tabs">
     <button class="tab-btn active" onclick="showTab('short')">⚡ Short Version</button>
-    <button class="tab-btn" onclick="showTab('long')">📖 Groups</button>
+    <button class="tab-btn" onclick="showTab('combined')">📖 Combined Knowledge</button>
     <button class="tab-btn" onclick="showTab('chunks')">📄 All Chunks</button>
 </div>
 
@@ -138,8 +138,8 @@
     <div class="content" id="final-content"><p class="loading">Rendering...</p></div>
 </div>
 
-<div id="tab-long" class="tab-content">
-    {{GROUPS_ACCORDION}}
+<div id="tab-combined" class="tab-content">
+    <div class="content" id="combined-content"><p class="loading">Rendering...</p></div>
 </div>
 
 <div id="tab-chunks" class="tab-content">
@@ -147,6 +147,7 @@
 </div>
 
 <textarea id="data-final" hidden>{{FINAL_TEXT}}</textarea>
+<textarea id="data-combined" hidden>{{COMBINED_TEXT}}</textarea>
 {{DATA_TEXTAREAS}}
 
 <script>
@@ -198,6 +199,13 @@ document.addEventListener('DOMContentLoaded', function() {
     finalEl.innerHTML = finalRaw.trim()
         ? render(finalRaw)
         : '<p class="empty">No final synthesis available yet.</p>';
+
+    // Render combined knowledge
+    var combinedEl = document.getElementById('combined-content');
+    var combinedRaw = getRaw('data-combined');
+    combinedEl.innerHTML = combinedRaw.trim()
+        ? render(combinedRaw)
+        : '<p class="empty">No combined knowledge available yet.</p>';
 
     // Lazy render accordions
     document.querySelectorAll('.chunk-accordion[data-source]').forEach(function(el) {

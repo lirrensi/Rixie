@@ -25,9 +25,7 @@ def export_html(
     final_path = book_dir / "final.md" if generate_final else None
     synthesis_dir = book_dir / "synthesis"
     distilled_dir = book_dir / "distilled"
-    group_files = (
-        sorted(synthesis_dir.glob("group_*.md")) if synthesis_dir.exists() else []
-    )
+    combined_path = synthesis_dir / "combined.md" if synthesis_dir.exists() else None
     distilled_files = (
         sorted(distilled_dir.glob("*_distilled.md")) if distilled_dir.exists() else []
     )
@@ -39,18 +37,11 @@ def export_html(
         else ""
     )
 
-    groups = []
-    for gf in group_files:
-        if gf.exists():
-            group_num = re.search(r"group_(\d+)", gf.name)
-            num = group_num.group(1) if group_num else "?"
-            groups.append(
-                {
-                    "num": num,
-                    "name": f"Group {num}",
-                    "raw": gf.read_text(encoding="utf-8"),
-                }
-            )
+    combined_raw = (
+        combined_path.read_text(encoding="utf-8")
+        if combined_path and combined_path.exists()
+        else ""
+    )
 
     chunks = []
     for df in sorted(distilled_files):
@@ -63,17 +54,6 @@ def export_html(
             chunks.append({"num": num, "title": title, "raw": raw})
 
     # ── Build accordion HTML ────────────────────────────────
-    groups_accordion = ""
-    for i, g in enumerate(groups):
-        groups_accordion += (
-            f'<details class="chunk-accordion" data-source="data-group-{i}" data-target="group-{i}">\n'
-            f"    <summary>📂 {html_mod.escape(g['name'])}</summary>\n"
-            f'    <div class="content" id="group-{i}"><p class="loading">Rendering...</p></div>\n'
-            f"</details>\n"
-        )
-    if not groups:
-        groups_accordion = '<p class="empty">No group distillations available yet.</p>'
-
     chunks_accordion = ""
     for i, c in enumerate(chunks):
         chunks_accordion += (
@@ -87,9 +67,9 @@ def export_html(
 
     # ── Build textarea HTML (raw content, zero processing) ──
     data_textareas = ""
-    for i, g in enumerate(groups):
+    if combined_raw:
         data_textareas += (
-            f'<textarea id="data-group-{i}" hidden>{g["raw"]}</textarea>\n'
+            f'<textarea id="data-combined" hidden>{combined_raw}</textarea>\n'
         )
     for i, c in enumerate(chunks):
         data_textareas += (
@@ -100,7 +80,7 @@ def export_html(
     result = template
     result = result.replace("{{BOOK_NAME}}", html_mod.escape(book_name))
     result = result.replace("{{FINAL_TEXT}}", final_raw)
-    result = result.replace("{{GROUPS_ACCORDION}}", groups_accordion)
+    result = result.replace("{{COMBINED_TEXT}}", combined_raw)
     result = result.replace("{{CHUNKS_ACCORDION}}", chunks_accordion)
     result = result.replace("{{DATA_TEXTAREAS}}", data_textareas)
 

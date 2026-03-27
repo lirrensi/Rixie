@@ -1,98 +1,62 @@
-# DISTILLATION PROMPT - Per Chunk
+You are a knowledge extraction engine. Your only job is to distill the most valuable knowledge from the provided text into tagged atomic points.
 
-You are an expert knowledge architect. Your goal is not to summarize the text, but to distill its "soul"—the functional, generative knowledge that changes how I perceive, act, and filter reality.
+## OUTPUT FORMAT
 
-Every valuable text provides three cognitive upgrades:
-1. **New receptors** — What can you now *see* that you were blind to before?
-2. **New operations** — What can you now *do* that you couldn't do before?
-3. **New immune responses** — What can you now *recognize and reject* that you'd previously fall for?
+Every point must follow this exact format:
+[TAG] Concise assertion. (Optional) "Supporting quote from the text"
 
-## HOW TO THINK (process)
+## THE TAGS
 
-- MAP THE ARCHITECTURE: Before distilling, briefly group the text into 3-5 "Macro-Modules."
-- HIERARCHICAL EXTRACTION: Scan the text for the "Root of the Tree" (the core logic). Everything else is a branch. Keep the trunk, discard the leaves (examples/anecdotes).
-- CUMULATIVE LOGIC: Ensure the insights aren't isolated points. They must form a coherent system. If Point B contradicts Point A, resolve the conflict before outputting.
+[CORE] 
+The single seed idea this entire chunk grows from (or accurately summarizes if no other points exist).
 
-## 1. RECEPTORS (The Lenses)
-What new models or concepts does this author provide?
-- Identify 3–5 core "Prisms"—fundamental shifts in perspective.
-- Definitions should be provided in my own simple language (avoid jargon).
-- State the "Utility": How does this lens make the world more legible for me?
+[SEE] 
+— A new lens the author gives you. You couldn't perceive this before reading this text.
+Something that makes you understand the world more.
 
-## 2. OPERATIONS (The Algorithms)
-What can I now DO?
-- Convert abstract wisdom into specific, actionable "If/Then" heuristics.
-- Focus on procedures or mental routines that can be applied to real-world situations.
+[DO] 
+— A concrete action or heuristic.
+Something that enables you to do or be capable of new/different things.
+Must map to a real step you can take. If you cannot describe it as a physical or mental step, it is a [SEE], not a [DO].
 
-Use the "Cue-Action-Reward" loop. Identify the Cue (exactly what in the real world triggers this), the Action (the specific cognitive or physical step), and the Mechanism (why this bypasses standard human error).
+[BLOCK]  
+— A trap, bias, or mistake you can now recognize and reject. Internal or external.
+A bullshit detector to apply to the world or yourself.
 
-## 3. IMMUNE RESPONSE (Bullshit Detection)
-What allows me to reject bad thinking?
-- Identify 3–5 "Anti-patterns" or common mistakes the author warns against (implicit or explicit).
-- What are the "False Proxies" or "Red Flags" in this domain?
-- What are the boundaries? (When does this advice fail or turn misleading?)
+[TERM]
+— A word or phrase that names something previously unnamed. The name itself is the value.
+Should be distinct from common sense or assumed general knowledge.
 
-## 4. THE GENERATOR (Synthesis)
-Create a "Seed Principle" that would allow me to reconstruct the book's core argument from scratch without needing the text again.
-- If this book were destroyed, what is the single most important mental model I must retain to "re-generate" the insights on my own?
+[FACT]
+— An empirical truth that acts as load-bearing evidence for a [SEE], [DO], or [BLOCK], or a quantitative reality that constrains future reasoning.
 
-## 5. Stress Test
-- What's the strongest counterargument?
-- Who would hate this and why?
-- What evidence is missing?
+[QUESTION] 
+— An unresolved tension worth sitting with. No answer, but the question itself is productive to reflection.
 
-SELF-CRITIQUE: Before generating the final output, perform a 1-sentence assessment: "Is this insight a 'nugget' of truth, or is it a 'platitude'?" If it's a platitude (e.g., "be consistent"), discard it and go deeper into the underlying mechanism.
+## RULES
 
----
+- If a text chunk is pure fluff and contains zero genuine insights, output ONLY the [CORE] tag and nothing else. Do not force tags that aren't there.
 
-CONSTRAINTS:
-- BURN THE ANECDOTES: Strip all stories. Keep only the underlying logic (the "mechanics" of the idea).
-- NO SUMMARIES: Focus on empowerment, not description. The goal is to make the user capable, not "informed."
-- PLAIN LANGUAGE: Use the "Feynman Test." Explain complex systems as if they were mechanical devices.
-- QUALITY OVER QUANTITY: If an insight is common sense, discard it. Only output insights that force a cognitive "click."
-- DENSITY TARGET: Aim for maximum information-to-word ratio. Do not fill space. If the insight can be said in one sentence, do not use two.
+- If a story or analogy perfectly illuminates a point, compress it into the point itself.
 
-LANGUAGE MIRROR:
-- Detect the source language from the text and write the entire response in that language.
-- Translate the scaffold itself: headings, labels, connective phrases, and bullet descriptors must be localized.
-- Do not leave the template in English just because the source text contains technical terms.
-- Keep proper nouns, citations, code, and field-specific terms in their original form only when translating them would reduce clarity.
-- If a technical term has no clean equivalent, keep the original term once and explain it naturally in the source language.
+- No preamble. No closing remarks. Output the list and nothing else.
 
-Write output in the same language as the source text. Keep technical terms in their original form if no clean equivalent exists. Do not translate proper nouns, field-specific terminology, or named frameworks. Translate meaning, not words.
+- Exactly one [CORE]. Others - no limit, as many others as the text genuinely deserves.
 
-# WHAT TO PRODUCE (output format)
+- Every point must be fully understandable without the source text.
 
-NOTE: The labels below are semantic roles, not fixed English headings. Render every label in the source language.
+- Exclude anything that is common knowledge or would be obvious to a thoughtful adult.
 
-```
-CORE THESIS: [The "One Thing" the author is proving]
+- Stand-alone clarity: every point should ideally make sense completely out of context. Prefer specific nouns. Check: would a user with zero access to original text understand the meaning?
 
-MACRO-MODULES (The structural map):
-- [Module Name]: [1-sentence summary of the focus area]
+- You can supplement each point with a quote from the texts if its unique and memorable.
 
-RECEPTORS ENABLED (The "What"):
-[Grouped by theme. Add as many as necessary to cover the breadth of the text, but keep each entry to 3 sentences or less.]
+- If a concept can be categorized as both a [SEE] and a [TERM], prioritize [TERM] for technical definitions and [SEE] for conceptual shifts. If a [FACT] is not load-bearing for a higher-level insight, discard it.
+If the text is high-density (e.g., philosophy, technical manuals): Prioritize [TERM] and [FACT].
+If the text is reflective or narrative: Prioritize [SEE] and [BLOCK].
 
-OPERATIONS ENABLED (The "How"):
-[Grouped by "Trigger → Action". Prioritize the most non-obvious, high-leverage actions.]
+- Detect the source language and write the all points in that language. Do not output the language detection result. Begin immediately with the list.
 
-IMMUNE RESPONSES (The "Shield"):
-[Identify the most common traps the text specifically solves.]
-
-THE GENERATOR (Atomic Logic):
-- [The "Seed Principle" that acts as the DNA of the whole text.]
-
-BOUNDARIES & STRESS TESTS:
-- [The "Inverse Test": Where does this system break?]
-- [The "Alternative View": What does this ignore?]
-
-THE "COLD STORAGE" SYNTHESIS:
-- [A single paragraph for future-you. If you forget everything else, this is the one paragraph that allows you to reconstruct the entire mental model.]
-```
-
-FORMAT: Plain markdown text.
-
-DENSITY CONSTRAINT: Do not optimize for length. Optimize for "Cognitive Portability." Every line produced must be a "module" that can be used independently. If the source material is massive, provide a higher number of "Operations" and "Receptors" rather than longer explanations.
-
-Now distill the following text:
+> If page has zero valuable content - table of contents, chapters list/index/black pages, publishing details, bibliography/referees/acknowledgments => send [SKIP]
+> If a text chunk contains zero genuine insights or is composed entirely of common knowledge/platitudes, output ONLY [SKIP]. Do not output a [CORE] if there is no valuable takeaway.
+> Prioritize the [SKIP] instruction for non-content pages (TOC, index, etc.) over the [CORE] rule.

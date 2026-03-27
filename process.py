@@ -22,9 +22,8 @@ Directory structure:
 
 Config:
     config.yaml             → LLM params (base_url, api_key, model, temperature)
-    distill_chunk_prompt.md → Per-chunk distillation prompt
-    distill_group_prompt.md → Per-group synthesis prompt
-    distill_final_prompt.md → Final merge prompt
+    distill_chunk_prompt.md → Per-chapter distillation prompt (outputs tagged list)
+    distill_final_prompt.md → Final synthesis prompt (list → readable article)
 """
 
 import sys
@@ -146,14 +145,12 @@ def process_book(book_path: Path, config: dict) -> bool:
     print("STEP 3/4: SYNTHESIZING")
     print(f"{'─' * 40}")
 
-    group_prompt = load_synth_prompt(Path("distill_group_prompt.md"))
     final_prompt = load_synth_prompt(Path("distill_final_prompt.md"))
     stats = synthesize_book(
         distilled_dir,
         synthesis_dir,
         book_dir,
         config,
-        group_prompt,
         final_prompt,
         do_final,
     )
@@ -323,7 +320,6 @@ def main():
     # Check for prompt files
     for prompt_file in [
         "distill_chunk_prompt.md",
-        "distill_group_prompt.md",
         "distill_final_prompt.md",
     ]:
         if not Path(prompt_file).exists():

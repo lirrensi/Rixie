@@ -46,6 +46,17 @@ def get_processed_chunks(output_dir: Path) -> set:
     return processed
 
 
+def get_skipped_chunks(output_dir: Path) -> set:
+    """Get set of chunk indices that were intentionally skipped ([SKIP])."""
+    skipped = set()
+    if output_dir.exists():
+        for f in output_dir.glob("*.md"):
+            m = re.match(r"^(\d+)_SKIP\.md$", f.name)
+            if m:
+                skipped.add(int(m.group(1)))
+    return skipped
+
+
 def distill_chunk(
     client: OpenAI,
     chunk_text: str,
@@ -78,21 +89,20 @@ def distill_chunk(
     return content
 
 
-def validate_distillation(
-    text: str, min_lines: int = 5, min_chars: int = 200
-) -> Optional[str]:
+def validate_distillation(text: str, min_chars: int = 200) -> Optional[str]:
     """Validate that a distillation response is actually useful.
 
     Returns None if valid, or an error description if not.
+    Returns "SKIP" if the model intentionally skipped this chunk.
     """
     if not text or not text.strip():
         return "Empty response from model"
 
     stripped = text.strip()
-    lines = [l for l in stripped.split("\n") if l.strip()]
 
-    if len(lines) < min_lines:
-        return f"Only {len(lines)} non-empty lines (minimum: {min_lines})"
+    # Model intentionally skipped this chunk (low-value content)
+    if stripped == "[SKIP]":
+        return "SKIP"
 
     if len(stripped) < min_chars:
         return f"Only {len(stripped)} characters (minimum: {min_chars})"
@@ -106,7 +116,7 @@ def validate_distillation(
         r"^I apologize",
         r"^The (text|content) (provided|given) (is|does)",
     ]
-    first_line = lines[0].strip()
+    first_line = stripped.split("\n")[0].strip()
     for pattern in error_patterns:
         if re.match(pattern, first_line, re.IGNORECASE):
             return f"Model returned error-like response: '{first_line[:80]}'"
@@ -126,17 +136,20 @@ def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     processed = get_processed_chunks(output_dir)
+    skipped = get_skipped_chunks(output_dir)
     chunk_files = sorted(chunks_dir.glob("*.md"))
     chunk_files = [f for f in chunk_files if f.name != "MANIFEST.md"]
 
-    print(f"   📚 Found {len(chunk_files)} chunks | ✅ Already done: {len(processed)}")
+    print(
+        f"   📚 Found {len(chunk_files)} chunks | ✅ Already done: {len(processed)} | ⏭️ Skipped: {len(skipped)}"
+    )
 
     to_process = []
     for f in chunk_files:
         m = re.match(r"^(\d+)_", f.name)
         if m:
             idx = int(m.group(1))
-            if idx not in processed:
+            if idx not in processed and idx not in skipped:
                 to_process.append(f)
 
     if not to_process:
@@ -160,10 +173,13 @@ def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) 
 
         print(f"   [{i}/{total}] {title[:50]}...", end="", flush=True)
 
-        # Clean up any previous ERROR file for this chunk (we're retrying)
+        # Clean up any previous ERROR/SKIP file for this chunk (we're retrying)
         error_file = output_dir / f"{idx:03d}_ERROR.md"
+        skip_file = output_dir / f"{idx:03d}_SKIP.md"
         if error_file.exists():
             error_file.unlink()
+        if skip_file.exists():
+            skip_file.unlink()
 
         try:
             start = time.time()
@@ -171,9 +187,18 @@ def distill_book(chunks_dir: Path, output_dir: Path, config: dict, prompt: str) 
                 client, chunk_text, title, prompt, model, temperature
             )
 
-            # Validate the response — reject empty/useless garbage
+            # Validate the response
             validation_error = validate_distillation(distilled)
-            if validation_error:
+            if validation_error == "SKIP":
+                # Model intentionally skipped — low-value content, don't retry
+                elapsed = time.time() - start
+                print(f" ⏭️ {elapsed:.0f}s | skipped (low-value content)")
+                skip_file.write_text(
+                    f"# Skipped\n\nModel returned [SKIP] — low-value content.\n",
+                    encoding="utf-8",
+                )
+                continue
+            elif validation_error:
                 elapsed = time.time() - start
                 print(f" ❌ {elapsed:.0f}s | {validation_error}")
                 error_file.write_text(

@@ -226,10 +226,7 @@ def export_epub(
     final_path = book_dir / "final.md" if generate_final else None
     synthesis_dir = book_dir / "synthesis"
     distilled_dir = book_dir / "distilled"
-
-    group_files = (
-        sorted(synthesis_dir.glob("group_*.md")) if synthesis_dir.exists() else []
-    )
+    combined_path = synthesis_dir / "combined.md" if synthesis_dir.exists() else None
     distilled_files = (
         sorted(distilled_dir.glob("*_distilled.md")) if distilled_dir.exists() else []
     )
@@ -241,18 +238,11 @@ def export_epub(
         else ""
     )
 
-    groups = []
-    for gf in group_files:
-        if gf.exists():
-            group_num = re.search(r"group_(\d+)", gf.name)
-            num = group_num.group(1) if group_num else "?"
-            groups.append(
-                {
-                    "num": num,
-                    "name": f"Group {num}",
-                    "raw": gf.read_text(encoding="utf-8"),
-                }
-            )
+    combined_raw = (
+        combined_path.read_text(encoding="utf-8")
+        if combined_path and combined_path.exists()
+        else ""
+    )
 
     chunks = []
     for df in sorted(distilled_files):
@@ -296,29 +286,20 @@ def export_epub(
         )
         chapters.append(chapter1)
 
-    # ── Section 2: Groups ─────────────────────────────────
-    if groups:
-        # Create section header
-        groups_html = f"""
+    # ── Section 2: Combined Knowledge ──────────────────────
+    if combined_raw.strip():
+        section2_html = f"""
         <div class="section-header">
-            <h1>Groups</h1>
-            <p>Thematic groupings and synthesis</p>
+            <h1>Combined Knowledge</h1>
+            <p>All distilled insights from {book_name}</p>
         </div>
+        {_md_to_html(combined_raw)}
         """
 
-        # Add each group as subsection
-        for i, g in enumerate(groups):
-            groups_html += f"""
-            <h2>{g["name"]}</h2>
-            {_md_to_html(g["raw"])}
-            """
-            if i < len(groups) - 1:
-                groups_html += "<hr/>"
-
         chapter2 = _create_chapter(
-            title="2. Groups",
-            content_html=groups_html,
-            file_name="section2_groups.xhtml",
+            title="2. Combined Knowledge",
+            content_html=section2_html,
+            file_name="section2_combined.xhtml",
             book=book,
         )
         chapters.append(chapter2)

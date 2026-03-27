@@ -1,106 +1,73 @@
-# FINAL READABLE SYNTHESIS
+# Book Synthesis Prompt
 
-You are receiving a compressed, structured distillation of a book — already processed through chunk extraction and group synthesis. It is dense, accurate, and hard to read.
-
-Your job is to **transform it into a coherent, human-readable article** that someone could actually enjoy reading and learn from — like a well-written Wikipedia entry or a great explainer essay.
-
-This is not another round of compression. This is **translation from structured knowledge into flowing understanding**.
-
-## Core Directives
-
-### 1. CONNECT THE DOTS
-- Your primary job is to show how ideas *relate* to each other, not just list them.
-- Add transitional language between concepts using the natural connectors of the source language.
-- When a concept depends on another, *say so explicitly*. Readers need the thread.
-- Think of the output as a **narrative of understanding**, not a bullet-point dump.
-
-### 2. PRIORITIZE FLOW OVER DENSITY
-- Each section should read like it belongs next to the previous one.
-- Use the "because/therefore/so" chain — make causality visible.
-- It's better to use 30% more words if it means someone actually understands the connection between Principle 1 and Principle 2.
-- If an idea is abstract, **bridge it to something concrete** before moving on.
-
-### 3. SIMPLIFY THE LANGUAGE
-- Replace jargon with plain language. If you must use a technical term, define it inline on first use.
-- Use **analogies** where they illuminate — not as filler, but as bridges. ("Think of it like...", "It works the way a ___ does when...")
-- Short sentences for complex ideas. Longer sentences only for flow and connection.
-- If a sentence would confuse your smart friend who hasn't read the book, rewrite it.
-
-### 4. MAKE THE STRUCTURE WORK FOR HUMANS
-- Use clear, descriptive section headers that tell you what you'll learn.
-- Opening section should set up the "big picture" in 2-4 sentences — what is this book *about*, and why does it matter?
-- End with a "So What?" section that ties everything together and makes the reader feel like they gained something real.
-
-## Input You're Working With
-
-You'll receive a structured distillation containing:
-- **CENTRAL THESIS** — the core argument
-- **CORE ARCHITECTURE** — the main principles
-- **WHAT I CAN SEE NOW** — perception upgrades
-- **WHAT I CAN DO NOW** — actionable heuristics  
-- **WHAT I CAN REJECT NOW** — bullshit detection
-- **UNRESOLVED TENSIONS** — open conflicts
-- **SEED PRINCIPLE** — the regenerative kernel
-- **COLD STORAGE** — dense summary paragraph
-
-Your job is to **use all of this as raw material** to write something readable.
-
-## Output Format
-
-Write a coherent article with these sections:
+You will receive a collection of tagged knowledge bits extracted from a book. Your job is to transform them into a rich, flowing article that reads like something a thoughtful person wrote — not a summary, not a report, but a piece of writing someone would actually enjoy reading.
 
 ---
 
-### **The Big Picture** (2-4 sentences)
-What is this book's core claim? Why should I care? Set the stage in plain language.
+## Your ingredients
 
-### **How It Works** (the main body)
-This is the bulk of your output. Write it as flowing paragraphs, not bullet points. 
-- Introduce the core principles with clear explanations and analogies.
-- Show how the principles connect and build on each other.
-- Include the perception upgrades ("lenses") naturally as you explain each principle.
-- Where relevant, mention boundaries — when does this apply, when doesn't it?
+Here are the types of bits you may receive. Each tag tells you what kind of material it is:
 
-### **What You Can Actually Do**
-Practical takeaways, written as clear actions. Not a bullet list — a short section that explains the heuristics in context. ("The key move here is...")
-
-### **What to Watch Out For**
-The common traps and bad patterns the book helps you spot. Write this as warnings with context — not just "Trap → Flag → Limit" but *why* these traps exist and *how* to spot them.
-
-### **The One Thing to Remember**
-The seed principle, rewritten as a memorable, self-contained idea. One paragraph max. This should feel like the "elevator pitch" version of the entire book.
-
-### **Tensions & Limits**
-Honest caveats. What's unresolved? What might this framework miss? Where does it break? Be direct but fair.
+- `[CORE]` — The seed idea. The sentence the whole book grows from.
+- `[SEE]` — A perceptual shift. Something the reader couldn't see before, and now can.
+- `[DO]` — A concrete action or practice. Something physical or mental a person can actually do.
+- `[BLOCK]` — A trap, bias, or mistake the book helps you recognize and avoid.
+- `[TERM]` — A word or phrase that names something previously unnamed. The name itself is the value.
+- `[FACT]` — An empirical truth that changes the weight of something else.
+- `[QUESTION]` — Something the book leaves genuinely unresolved. No answer yet, but the question is worth sitting with.
 
 ---
 
-## Style Guide
+## What your article must contain
 
-- **Tone**: Warm, clear, confident. Like a smart friend explaining something they found fascinating. Not academic. Not dumbed-down.
-- **Analogies**: Use them. They're the fastest path from abstract to understood. One per major concept is ideal.
-- **Transitions**: Every paragraph should connect to the previous one. If you can remove a paragraph and nothing breaks, you didn't connect it well enough.
-- **Density**: Aim for *understanding density*, not *word density*. A reader should finish each section thinking "ah, I get it" — not "that was a lot of words."
-- **Length**: Let it breathe. Quality and clarity over brevity. If a concept needs a paragraph to land properly, give it one.
+The following elements must all appear somewhere in the article — but **you decide where, in what order, and how prominently**. Some will deserve three paragraphs. Others might be a single sentence in passing. Let the book's own shape determine the weight.
 
-## Constraints
-
-- Do NOT just reformat the bullet points into paragraphs. Actually *rewrite* for flow and connection.
-- Do NOT add information not present in the source distillation. You're translating, not inventing.
-- Do NOT use the section names from the input as your section headers — the input structure is scaffolding, not the final shape.
-- DO use the analogies and plain language to make unfamiliar ideas feel accessible.
-- DO make the connections between ideas explicit — this is your primary value-add.
-- DO use same speaking language as the material.
-
-LANGUAGE MIRROR:
-- Detect the source language from the distillation and write the entire article in that language.
-- Translate the scaffold itself: section headers, transitions, and connective phrases must be localized.
-- Do not leave the template in English just because the input contains technical terms or English labels from earlier stages.
-- Keep proper nouns, citations, code, and field-specific terms in their original form only when translating them would reduce clarity.
-- If a technical term has no clean equivalent, keep the original term once and explain it naturally in the source language.
-
-NOTE: The section names below are semantic roles, not fixed English headings. Render every heading in the source language.
+- **The core perceptual shift** — the most important thing the reader sees differently after this book
+- **At least one new term** — introduced naturally, as if you're naming something the reader already half-knew
+- **Something the reader can actually do** — grounded, specific, not vague advice
+- **A concrete analogy or image** — something that makes an abstract idea feel real and touchable
+- **The intellectual lineage** — where this thinking comes from, who else lives near these ideas
+- **The enemy** — what broken assumption, lazy habit, or seductive lie this book is pushing back against
+- **The traps** — mistakes you can now recognize, in yourself or in others
+- **The tensions** — what the book doesn't fully resolve, where it strains or leaves you hanging
+- **The perception upgrades** — the new lenses the book gives you, the things you'll notice that you couldn't notice before
 
 ---
 
-Now transform the following distillation into a readable, connected article:
+## How to write it
+
+**Find the shape of this book, then write to that shape.**
+
+Don't impose a structure. Ask: what is the intellectual drama here? What is being fought, discovered, named, or resolved? Start there, and let everything else arrange itself around that center.
+
+Some books open with a provocation. Some with a portrait of the world before the idea. Some with the enemy. Some with the moment of seeing. You decide — based on these particular bits, what is the most alive place to begin?
+
+**Never announce the ingredients.** Don't write "The book's core perceptual shift is..." or "One trap to watch for is..." Just write. Let the ideas speak in flowing prose. The reader should encounter the enemy, the lenses, the term, the tension — without ever seeing the scaffolding.
+
+**Use analogies as bridges, not decoration.** When an idea is abstract, carry the reader to something concrete before moving on. One good analogy per major concept. Make it earn its place.
+
+**Show the connections.** Your primary job is not to list ideas — it's to show how they relate. Why does this idea lead to that one? What does understanding X make possible that wasn't possible before? Use the natural language of causality: *because, therefore, which means, and so, this is why*.
+
+**Let weight vary naturally.** Not everything is equally important. Some ideas get a full paragraph. Some get a clause. The prominence should reflect the book's actual emphasis — not the number of bits you received on a topic.
+
+**Tone:** Warm, curious, confident. Like a smart friend who found this book genuinely fascinating and wants you to feel what they felt. Not academic. Not breathless. Not dumbed down.
+
+**Length:** Let it breathe. This is a long read, not a summary. If a concept needs a paragraph to land, give it one.
+
+---
+
+## How to end it
+
+Close the article with a single paragraph — the seed.
+
+This is not a summary. It's the one thing: the idea that, if the reader forgot everything else, would still be worth keeping. Written as if you're handing them something small and heavy to carry in their pocket.
+
+It should feel like the last line of a good essay — the moment where everything that came before suddenly weighs a little more.
+
+---
+
+## Language
+
+Detect the language of the source bits and write the entire article in that language — including all transitions, connective phrases, and the closing seed. Keep proper names, citations, and field-specific terms in their original form only when translating them would reduce clarity.
+
+---

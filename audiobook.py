@@ -172,17 +172,16 @@ def find_books() -> list[dict]:
             "name": book_dir.name,
             "dir": book_dir,
             "has_final": (book_dir / "final.md").exists(),
-            "groups": sorted((book_dir / "synthesis").glob("group_*.md"))
+            "has_combined": (book_dir / "synthesis" / "combined.md").exists()
             if (book_dir / "synthesis").exists()
-            else [],
-            "has_groups": False,
+            else False,
+            "has_distilled": False,
         }
-        info["has_groups"] = len(info["groups"]) > 0
         info["has_distilled"] = (book_dir / "distilled").exists() and any(
             (book_dir / "distilled").glob("*_distilled.md")
         )
 
-        if info["has_final"] or info["has_groups"] or info["has_distilled"]:
+        if info["has_final"] or info["has_combined"] or info["has_distilled"]:
             books.append(info)
 
     return books
@@ -196,8 +195,8 @@ def pick_book(books: list[dict]) -> dict | None:
         parts = []
         if book["has_final"]:
             parts.append("final")
-        if book["has_groups"]:
-            parts.append(f"{len(book['groups'])} groups")
+        if book["has_combined"]:
+            parts.append("combined")
         status = ", ".join(parts) if parts else "distilled chunks only"
         print(f"   {i}. {book['name']}")
         print(f"      └─ {status}")
@@ -223,13 +222,11 @@ def pick_content(book: dict) -> list[str]:
     print(f"\n📖 {book['name']}\n")
 
     options = []
-    if book["has_groups"]:
-        options.append(
-            ("groups", f"🎧 Groups combined ({len(book['groups'])} groups → 1 track)")
-        )
+    if book["has_combined"]:
+        options.append(("combined", "🎧 Combined knowledge (1 track)"))
     if book["has_final"]:
         options.append(("final", "📄 Final synthesis (1 track)"))
-    if book["has_distilled"] and not book["has_groups"] and not book["has_final"]:
+    if book["has_distilled"] and not book["has_combined"] and not book["has_final"]:
         options.append(("distilled", "📝 Distilled chunks (all → 1 track)"))
 
     for i, (_, label) in enumerate(options, 1):
@@ -293,53 +290,23 @@ async def generate_audiobook(
     for content_type in content_types:
         print(f"\n{'─' * 40}")
 
-        if content_type == "groups":
-            print("🎧 Generating: Groups combined track")
-            # Load all groups
-            texts = []
-            for gf in book["groups"]:
-                md = gf.read_text(encoding="utf-8")
-                text = md_to_speech_text(md)
-                if text.strip():
-                    texts.append(text)
-
-            if not texts:
-                print("   ⚠️  No group content found")
+        if content_type == "combined":
+            print("🎧 Generating: Combined knowledge track")
+            combined_path = book["dir"] / "synthesis" / "combined.md"
+            if not combined_path.exists():
+                print("   ⚠️  No combined.md found")
                 continue
 
-            combined = "\n\n---\n\n".join(texts)
-            output_path = audiobook_dir / "groups.mp3"
-            word_count = len(combined.split())
-            print(f"   📝 {len(texts)} groups, ~{word_count:,} words")
+            md = combined_path.read_text(encoding="utf-8")
+            text = md_to_speech_text(md)
+            word_count = len(text.split())
+            print(f"   📝 ~{word_count:,} words")
 
-            if ffmpeg_available and len(texts) > 1:
-                # Generate per-group MP3s, then merge (better chapter breaks)
-                print(f"   🔄 Generating {len(texts)} segment(s)...")
-                temp_mp3s = []
-                for i, text in enumerate(texts):
-                    temp_path = audiobook_dir / f"_temp_group_{i:02d}.mp3"
-                    print(
-                        f"      [{i + 1}/{len(texts)}] Group {i + 1}...",
-                        end="",
-                        flush=True,
-                    )
-                    await text_to_mp3(text, temp_path, voice, rate)
-                    size = temp_path.stat().st_size
-                    print(f" ✅ {size:,} bytes")
-                    temp_mp3s.append(temp_path)
-
-                print(f"   🔗 Merging...", end="", flush=True)
-                await merge_mp3s(temp_mp3s, output_path)
-                print(f" ✅ {output_path.name}")
-
-                # Cleanup temp files
-                for tp in temp_mp3s:
-                    tp.unlink(missing_ok=True)
-            else:
-                print(f"   🔄 Generating...", end="", flush=True)
-                await text_to_mp3(combined, output_path, voice, rate)
-                size = output_path.stat().st_size
-                print(f" ✅ {output_path.name} ({size:,} bytes)")
+            output_path = audiobook_dir / "combined.mp3"
+            print(f"   🔄 Generating...", end="", flush=True)
+            await text_to_mp3(text, output_path, voice, rate)
+            size = output_path.stat().st_size
+            print(f" ✅ {output_path.name} ({size:,} bytes)")
 
         elif content_type == "final":
             print("📄 Generating: Final synthesis track")
