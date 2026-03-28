@@ -9,6 +9,23 @@ import re
 from pathlib import Path
 
 TEMPLATE_PATH = Path(__file__).parent / "template.html"
+CHUNK_BREAK_HTML = '<div class="chunk-break" aria-hidden="true"><span>⁂</span></div>'
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Remove YAML frontmatter from a markdown block."""
+    return re.sub(r"^---\s*[\s\S]*?---\s*", "", text or "", flags=re.DOTALL).strip()
+
+
+def _chunk_body(raw: str) -> str:
+    """Return the rendered body for a distilled chunk."""
+    return _strip_frontmatter(raw)
+
+
+def _build_chunk_display(chunks: list[dict]) -> str:
+    """Join chunk bodies with a neutral visual separator."""
+    parts = [body for body in (_chunk_body(c["raw"]) for c in chunks) if body]
+    return f"\n\n{CHUNK_BREAK_HTML}\n\n".join(parts)
 
 
 def export_html(
@@ -49,16 +66,18 @@ def export_html(
             chunk_num = re.search(r"^(\d+)_", df.name)
             num = chunk_num.group(1) if chunk_num else "?"
             raw = df.read_text(encoding="utf-8")
-            title_match = re.search(r"title:\s*(.+)", raw)
-            title = title_match.group(1).strip() if title_match else df.stem
-            chunks.append({"num": num, "title": title, "raw": raw})
+            chunks.append({"num": num, "raw": raw})
+
+    combined_display = _build_chunk_display(chunks) if chunks else combined_raw
+    if not combined_display.strip():
+        combined_display = combined_raw
 
     # ── Build accordion HTML ────────────────────────────────
     chunks_accordion = ""
     for i, c in enumerate(chunks):
         chunks_accordion += (
             f'<details class="chunk-accordion" data-source="data-chunk-{i}" data-target="chunk-{i}">\n'
-            f"    <summary>📄 Chunk {c['num']}: {html_mod.escape(c['title'][:80])}</summary>\n"
+            f"    <summary>📄 Chunk {c['num']}</summary>\n"
             f'    <div class="content" id="chunk-{i}"><p class="loading">Rendering...</p></div>\n'
             f"</details>\n"
         )
@@ -67,10 +86,6 @@ def export_html(
 
     # ── Build textarea HTML (raw content, zero processing) ──
     data_textareas = ""
-    if combined_raw:
-        data_textareas += (
-            f'<textarea id="data-combined" hidden>{combined_raw}</textarea>\n'
-        )
     for i, c in enumerate(chunks):
         data_textareas += (
             f'<textarea id="data-chunk-{i}" hidden>{c["raw"]}</textarea>\n'
@@ -80,7 +95,7 @@ def export_html(
     result = template
     result = result.replace("{{BOOK_NAME}}", html_mod.escape(book_name))
     result = result.replace("{{FINAL_TEXT}}", final_raw)
-    result = result.replace("{{COMBINED_TEXT}}", combined_raw)
+    result = result.replace("{{COMBINED_TEXT}}", combined_display)
     result = result.replace("{{CHUNKS_ACCORDION}}", chunks_accordion)
     result = result.replace("{{DATA_TEXTAREAS}}", data_textareas)
 

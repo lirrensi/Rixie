@@ -13,6 +13,13 @@ import ebooklib
 from ebooklib import epub
 import markdown
 
+CHUNK_BREAK_HTML = '<div class="chunk-break" aria-hidden="true"><span>⁂</span></div>'
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Remove YAML frontmatter from a markdown block."""
+    return re.sub(r"^---\s*[\s\S]*?---\s*", "", text or "", flags=re.DOTALL).strip()
+
 
 def _preprocess_markdown(text: str) -> str:
     """Preprocess markdown to ensure lists are properly recognized."""
@@ -48,8 +55,7 @@ def _md_to_html(md_text: str) -> str:
         return "<p><em>No content available.</em></p>"
 
     # Remove YAML frontmatter
-    text = md_text.strip()
-    text = re.sub(r"^---[\s\S]*?---\s*", "", text)
+    text = _strip_frontmatter(md_text)
 
     # Remove wrapping code fences if present
     backticks = chr(96) * 3
@@ -86,6 +92,12 @@ def _md_to_html(md_text: str) -> str:
         # Fallback: escape and wrap in pre
         escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         return f"<pre>{escaped}</pre>"
+
+
+def _build_chunk_display(chunks: list[dict]) -> str:
+    """Join chunk bodies with a neutral visual separator."""
+    parts = [c["body"] for c in chunks if c.get("body", "").strip()]
+    return f"\n\n{CHUNK_BREAK_HTML}\n\n".join(parts)
 
 
 def _create_chapter(
@@ -166,6 +178,25 @@ def _create_chapter(
             color: #7f8c8d;
             margin: 1em 0;
             font-style: italic;
+        }}
+        .chunk-break {{
+            display: flex;
+            align-items: center;
+            gap: 0.75em;
+            margin: 1.75em 0;
+            color: #7f8c8d;
+            break-before: page;
+            page-break-before: always;
+        }}
+        .chunk-break::before,
+        .chunk-break::after {{
+            content: "";
+            flex: 1;
+            border-top: 1px solid #ddd;
+        }}
+        .chunk-break span {{
+            padding: 0 0.5em;
+            letter-spacing: 0.2em;
         }}
         table {{
             width: 100%;
@@ -250,9 +281,17 @@ def export_epub(
             chunk_num = re.search(r"^(\d+)_", df.name)
             num = chunk_num.group(1) if chunk_num else "?"
             raw = df.read_text(encoding="utf-8")
-            title_match = re.search(r"title:\s*(.+)", raw)
-            title = title_match.group(1).strip() if title_match else df.stem
-            chunks.append({"num": num, "title": title, "raw": raw})
+            chunks.append(
+                {
+                    "num": num,
+                    "raw": raw,
+                    "body": _strip_frontmatter(raw),
+                }
+            )
+
+    combined_display = _build_chunk_display(chunks) if chunks else combined_raw
+    if not combined_display.strip():
+        combined_display = combined_raw
 
     # Create EPUB book
     book = epub.EpubBook()
@@ -287,13 +326,13 @@ def export_epub(
         chapters.append(chapter1)
 
     # ── Section 2: Combined Knowledge ──────────────────────
-    if combined_raw.strip():
+    if combined_display.strip():
         section2_html = f"""
         <div class="section-header">
             <h1>Combined Knowledge</h1>
             <p>All distilled insights from {book_name}</p>
         </div>
-        {_md_to_html(combined_raw)}
+        {_md_to_html(combined_display)}
         """
 
         chapter2 = _create_chapter(
@@ -317,11 +356,9 @@ def export_epub(
         # Add each chunk as subsection
         for i, c in enumerate(chunks):
             chunks_html += f"""
-            <h2>Chunk {c["num"]}: {c["title"]}</h2>
-            {_md_to_html(c["raw"])}
+            <h2>Chunk {c["num"]}</h2>
+            {_md_to_html(c["body"])}
             """
-            if i < len(chunks) - 1:
-                chunks_html += "<hr/>"
 
         chapter3 = _create_chapter(
             title="3. All Chunks",

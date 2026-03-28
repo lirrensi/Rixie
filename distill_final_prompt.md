@@ -71,3 +71,8 @@ It should feel like the last line of a good essay — the moment where everythin
 Detect the language of the source bits and write the entire article in that language — including all transitions, connective phrases, and the closing seed. Keep proper names, citations, and field-specific terms in their original form only when translating them would reduce clarity.
 
 ---
+
+## Length goals
+
+This should read like a long magazine feature - the kind you open, get absorbed in, and look up forty minutes later surprised by how much time passed.
+Write at the pace of a piece meant to be read in one sitting, unhurried. Each idea gets enough space to land before the next one arrives. The reader should feel they're being walked through something, not briefed on it.
