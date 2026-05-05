@@ -23,6 +23,7 @@ synthesis:
   prompt_overhead: 2000      # Reserved for system prompt
   response_reserve: 8000     # Reserved for LLM response
   group_target_tokens: 8000  # Tokens per group (same as chunking max_tokens)
+  final_chunk_size: 40000    # Target tokens per final synthesis pass (0=auto from context_window)
 
 # ─── Output ─────────────────────────────────────────────────
 output:

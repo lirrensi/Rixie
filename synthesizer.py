@@ -129,6 +129,46 @@ def split_by_tokens(
     return chunks
 
 
+def split_evenly(text: str, target_tokens: int) -> list[str]:
+    """Split text into roughly equal chunks by target token count.
+
+    Splits by paragraphs to maintain readability, distributing tokens
+    as evenly as possible across chunks.
+    """
+    total_tokens = count_tokens(text)
+
+    if total_tokens <= target_tokens:
+        return [text]
+
+    # Calculate number of equal chunks needed
+    num_chunks = math.ceil(total_tokens / target_tokens)
+    tokens_per_chunk = total_tokens // num_chunks
+
+    # Split by paragraphs (double newlines) for better flow
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
+
+    for para in paragraphs:
+        para_tokens = count_tokens(para)
+
+        # If adding this paragraph would exceed target, start new chunk
+        if current_chunk and (current_tokens + para_tokens > tokens_per_chunk):
+            chunks.append("\n\n".join(current_chunk))
+            current_chunk = [para]
+            current_tokens = para_tokens
+        else:
+            current_chunk.append(para)
+            current_tokens += para_tokens
+
+    # Don't forget the last chunk
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+
+    return chunks
+
+
 def run_llm(
     client: OpenAI, text: str, prompt: str, model: str, temperature: float
 ) -> str:
@@ -170,6 +210,10 @@ def synthesize_book(
     context_window = synth.get("context_window", 64000)
     prompt_overhead = synth.get("prompt_overhead", 2000)
     response_reserve = synth.get("response_reserve", 8000)
+    final_chunk_size = synth.get("final_chunk_size", 0)  # 0 = auto from context_window
+    final_chunk_threshold = synth.get(
+        "final_chunk_threshold", 1.1
+    )  # split if exceeds by 10%
 
     client = OpenAI(base_url=base_url, api_key=api_key)
     synthesis_dir.mkdir(parents=True, exist_ok=True)
@@ -208,10 +252,17 @@ def synthesize_book(
 
     combined_tokens = count_tokens(combined)
     usable = context_window - prompt_overhead - response_reserve
-    print(f"      Combined: {combined_tokens:,} tokens | Usable per pass: {usable:,}")
 
-    if combined_tokens <= usable:
-        # Fits in one pass — just send it
+    # Determine target chunk size: use final_chunk_size if set, else auto from context_window
+    if final_chunk_size > 0:
+        target_chunk = final_chunk_size - prompt_overhead - response_reserve
+    else:
+        target_chunk = usable
+
+    print(f"      Combined: {combined_tokens:,} tokens | Target: {target_chunk:,}")
+
+    if combined_tokens <= target_chunk:
+        # Fits within threshold — just send it
         print(f"      Fits in one pass ✨")
         try:
             t = time.time()
@@ -222,20 +273,18 @@ def synthesize_book(
             print(f"      ❌ {e}")
             return {"chunks": len(chunks), "combined": True, "final": False}
     else:
-        # Split into N chunks, summarize each, concatenate
-        parts = split_by_tokens(
-            combined, context_window, prompt_overhead, response_reserve
-        )
+        # Split into N equal chunks, summarize each, concatenate
+        parts = split_evenly(combined, target_chunk)
         num_parts = len(parts)
-        print(f"      Split into {num_parts} passes")
+        print(
+            f"      Split into {num_parts} equal passes (~{combined_tokens // num_parts:,} tokens each)"
+        )
 
         summaries = []
         for i, part in enumerate(parts, 1):
             part_tokens = count_tokens(part)
             print(
-                f"      [{i}/{num_parts}] {part_tokens:,} tokens...",
-                end="",
-                flush=True,
+                f"      [{i}/{num_parts}] {part_tokens:,} tokens...", end="", flush=True
             )
             try:
                 t = time.time()
