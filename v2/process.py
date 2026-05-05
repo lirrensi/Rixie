@@ -126,11 +126,14 @@ def prepare_workspace(
     if resume:
         artifact = load_artifact(book_yaml_path)
         print(f"↻ Resuming V2 workspace: {workspace_dir}")
+        print(f"   → Found {len(artifact.blocks)} blocks, {len(artifact.chapters)} chapters")
     else:
         artifact = build_artifact(source_path, slug)
         print(f"🆕 Creating V2 workspace: {workspace_dir}")
 
+    print(f"📄 Loading source text...")
     source_text = load_or_ingest_source(source_path, source_md_path, workspace_dir)
+    print(f"   → Loaded {len(source_text):,} characters")
     artifact = ensure_stage_defaults(artifact)
 
     ingest_stage = artifact.stages["ingest"]
@@ -150,7 +153,16 @@ def prepare_workspace(
     cartography_stage = artifact.stages["cartography"]
     if cartography_stage.status != "done" or not artifact.blocks:
         print("   [2/6] Building block map...")
+        print(f"   → Target {target_tokens} tokens, min {min_tokens}, max {max_tokens}")
         artifact = map_book_structure(
+            artifact,
+            source_text,
+            target_tokens=target_tokens,
+            min_tokens=min_tokens,
+            max_tokens=max_tokens,
+            encoding_model=encoding_model,
+        )
+        print(f"   ✅ Created {len(artifact.blocks)} blocks")
             artifact,
             source_text,
             target_tokens=target_tokens,
@@ -168,7 +180,15 @@ def prepare_workspace(
 
     if mini_summary_settings and artifact.blocks and artifact.stages["mini_summaries"].status != "done":
         print("   [3/6] Generating block mini summaries...")
+        print(f"   → Using {mini_summary_settings.model} with {parallel_calls} parallel calls")
         artifact = generate_block_mini_summaries(
+            artifact,
+            llm_settings=mini_summary_settings,
+            parallel_calls=parallel_calls,
+            prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
+        )
+        useful = sum(1 for b in artifact.blocks if b.useful)
+        print(f"   ✅ Mini summaries done: {useful}/{len(artifact.blocks)} useful")
             artifact,
             llm_settings=mini_summary_settings,
             parallel_calls=parallel_calls,

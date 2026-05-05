@@ -228,7 +228,7 @@ def group_blocks_into_chapters(
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
     useful_blocks = [block for block in artifact.blocks if block.useful is not False]
-    print(f"   🧭 Cartographer: {len(useful_blocks)} useful block(s)")
+    print(f"   🧭 Cartographer: {len(useful_blocks)} useful blocks out of {len(artifact.blocks)} total")
     if not useful_blocks:
         artifact.chapters = []
         stage.status = "done"
@@ -236,10 +236,15 @@ def group_blocks_into_chapters(
         stage.outputs = {**stage.outputs, "chapter_count": 0}
         return artifact.touch()
 
+    print(f"   📋 Building block list for LLM...")
     block_lines = []
     for block in useful_blocks:
         summary = block.mini_summary or ""
         block_lines.append(f"{block.block_id}: {summary}")
+
+    print(f"   🤖 Calling {llm_settings.model} to group into chapters...")
+    system = load_prompt(prompt_file)
+    user = "ORDERED BLOCK SUMMARIES:\n" + "\n".join(block_lines)
 
     system = load_prompt(prompt_file)
     user = "ORDERED BLOCK SUMMARIES:\n" + "\n".join(block_lines)
@@ -280,8 +285,19 @@ def map_book_structure(
     max_tokens: int = 1280,
     encoding_model: str = "gpt-4o-mini",
 ) -> BookArtifact:
+    print(f"   📊 Tokenizing with {encoding_model}...")
     artifact.stages.setdefault(CARTOGRAPHY_STAGE, StageState(name=CARTOGRAPHY_STAGE))
     artifact.blocks = build_blocks(
+        source_text,
+        target_tokens=target_tokens,
+        min_tokens=min_tokens,
+        max_tokens=max_tokens,
+        encoding_model=encoding_model,
+    )
+    print(f"   ✂️  Split into {len(artifact.blocks)} blocks")
+    artifact.stages[CARTOGRAPHY_STAGE].notes = (
+        "Block anchors generated. TODO: create mini-summaries and group them into chapters."
+    )
         source_text,
         target_tokens=target_tokens,
         min_tokens=min_tokens,

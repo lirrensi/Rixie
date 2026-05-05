@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from v2.cartographer import LLMSettings
@@ -104,13 +105,15 @@ def summarize_chapters(
     stage.status = "running"
     stage.notes = "Generating separate short and detailed summaries for each mapped chapter."
 
-    print(f"   ✍️ Chapter summaries: {len(artifact.chapters)} chapter(s)")
+    print(f"   ✍️ Chapter summaries: {len(artifact.chapters)} chapter(s) with {parallel_calls} parallel calls")
+    sys.stdout.flush()
 
     chapter_payloads = [
         (idx, chapter.title, _chapter_source_text(artifact, chapter.blocks))
         for idx, chapter in enumerate(artifact.chapters)
     ]
     max_workers = max(1, parallel_calls)
+    print(f"   🔥 Running {len(chapter_payloads)} short summaries...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         short_jobs = {
@@ -123,6 +126,9 @@ def summarize_chapters(
             artifact.chapters[idx].short_summary = future.result()
             completed += 1
             print(f"   • short {completed}/{len(chapter_payloads)}: {artifact.chapters[idx].title}")
+            sys.stdout.flush()
+
+    print(f"   🔥 Running {len(chapter_payloads)} detailed summaries...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         detailed_jobs = {
@@ -135,6 +141,9 @@ def summarize_chapters(
             artifact.chapters[idx].detailed_summary = future.result()
             completed += 1
             print(f"   • detail {completed}/{len(chapter_payloads)}: {artifact.chapters[idx].title}")
+            sys.stdout.flush()
+
+    print(f"   ✅ Chapter summaries complete: {len(artifact.chapters)} chapters")
 
     stage.status = "done"
     stage.outputs = {
@@ -163,11 +172,15 @@ def synthesize_overview(
     stage.notes = "Building a top abstract from chapter short summaries."
 
     print(f"   🧪 Abstract: compressing {len(artifact.chapters)} chapter short summary(s)")
+    sys.stdout.flush()
 
+    print(f"   📝 Merging chapter summaries...")
     chapter_summaries = "\n\n".join(
         f"## {chapter.title}\n{chapter.short_summary or ''}" for chapter in artifact.chapters
     ).strip()
+    print(f"   📋 Combined text: {len(chapter_summaries):,} chars")
 
+    print(f"   🤖 Calling {ultra_dense_settings.model} for abstract...")
     try:
         artifact.overview.ultra_dense_summary = _call_text(
             [
