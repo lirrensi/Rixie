@@ -137,11 +137,16 @@ def generate_block_mini_summaries(
     sys.stdout.flush()
 
     max_workers = max(1, parallel_calls)
+    print(f"   🚀 Submitting {total} parallel requests to {llm_settings.model}...")
+    sys.stdout.flush()
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
             executor.submit(_summarize_block, block.text or "", llm_settings, prompt_file): idx
             for idx, block in enumerate(artifact.blocks)
         }
+        print(f"   ⏳ Waiting for {total} responses...")
+        sys.stdout.flush()
         completed = 0
         for future in as_completed(future_map):
             idx = future_map[future]
@@ -295,15 +300,6 @@ def map_book_structure(
         encoding_model=encoding_model,
     )
     print(f"   ✂️  Split into {len(artifact.blocks)} blocks")
-    artifact.stages[CARTOGRAPHY_STAGE].notes = (
-        "Block anchors generated. TODO: create mini-summaries and group them into chapters."
-    )
-        source_text,
-        target_tokens=target_tokens,
-        min_tokens=min_tokens,
-        max_tokens=max_tokens,
-        encoding_model=encoding_model,
-    )
     artifact.stages[CARTOGRAPHY_STAGE].notes = (
         "Block anchors generated. TODO: create mini-summaries and group them into chapters."
     )
