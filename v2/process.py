@@ -12,6 +12,9 @@ import os
 import re
 import signal
 import sys
+
+# Shut up LiteLLM debug/info spam before any imports
+os.environ["LITELLM_LOG"] = "ERROR"
 from pathlib import Path
 
 import yaml

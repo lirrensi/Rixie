@@ -6,9 +6,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
+import litellm
 from litellm import completion
+
+# Shut up LiteLLM debug/info spam
+litellm.suppress_debug_info = True
+os.environ.setdefault("LITELLM_LOG", "ERROR")
 
 from v2.schema import BookArtifact, StageState
 
