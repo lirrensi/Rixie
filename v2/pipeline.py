@@ -6,17 +6,26 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+# Shut up EVERY LiteLLM log at every level before import
+os.environ["LITELLM_LOG"] = "ERROR"
+os.environ["LITELLM_SUPPRESS_DEBUG_INFO"] = "true"
 
 import litellm
 from litellm import completion
 
-# Shut up LiteLLM debug/info spam
-litellm.suppress_debug_info = True
-os.environ.setdefault("LITELLM_LOG", "ERROR")
-
 from v2.schema import BookArtifact, StageState
+
+# Nuke all LiteLLM loggers
+litellm.suppress_debug_info = True
+for name in ("LiteLLM", "litellm", "LiteLLM.Info"):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.ERROR)
+    logger.handlers.clear()
+    logger.propagate = False
 
 
 def build_completion_kwargs(
@@ -30,8 +39,6 @@ def build_completion_kwargs(
         "messages": messages,
         "temperature": temperature,
     }
-    if thinking:
-        kwargs["reasoning_effort"] = "high"
     return kwargs
 
 

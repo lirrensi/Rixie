@@ -33,11 +33,7 @@ async def _call_text_async(messages: list[dict], settings: LLMSettings) -> str:
         kwargs["api_key"] = settings.api_key
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
-    try:
-        response = await acompletion(**kwargs)
-    except Exception:
-        kwargs.pop("reasoning_effort", None)
-        response = await acompletion(**kwargs)
+    response = await acompletion(**kwargs)
     return (response.choices[0].message.content or "").strip()
 
 
