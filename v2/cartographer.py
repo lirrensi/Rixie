@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
@@ -133,6 +134,7 @@ def generate_block_mini_summaries(
 
     total = len(artifact.blocks)
     print(f"   🔎 Mini summaries: {total} block(s)")
+    sys.stdout.flush()
 
     max_workers = max(1, parallel_calls)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -148,6 +150,7 @@ def generate_block_mini_summaries(
             artifact.blocks[idx].useful = result.useful
             completed += 1
             print(f"   • mini {completed}/{total}: {artifact.blocks[idx].block_id} → useful={result.useful}")
+            sys.stdout.flush()
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
     stage.status = "done"
