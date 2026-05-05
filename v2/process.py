@@ -163,13 +163,6 @@ def prepare_workspace(
             encoding_model=encoding_model,
         )
         print(f"   ✅ Created {len(artifact.blocks)} blocks")
-            artifact,
-            source_text,
-            target_tokens=target_tokens,
-            min_tokens=min_tokens,
-            max_tokens=max_tokens,
-            encoding_model=encoding_model,
-        )
         if max_blocks is not None and max_blocks > 0:
             artifact.blocks = artifact.blocks[:max_blocks]
             artifact.stages["cartography"].outputs["block_count"] = len(artifact.blocks)
@@ -189,11 +182,7 @@ def prepare_workspace(
         )
         useful = sum(1 for b in artifact.blocks if b.useful)
         print(f"   ✅ Mini summaries done: {useful}/{len(artifact.blocks)} useful")
-            artifact,
-            llm_settings=mini_summary_settings,
-            parallel_calls=parallel_calls,
-            prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
-        )
+    elif artifact.stages["mini_summaries"].status == "done":
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["mini_summaries"].status == "done":
         print("   [3/6] Mini summaries skipped (already complete)")
