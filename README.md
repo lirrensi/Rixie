@@ -6,6 +6,8 @@ Too long did not Rixie
 
 **Throw books in. Get distilled knowledge out.**
 
+> Legacy V1 now lives under `v1/`. The existing root CLIs still proxy to V1 for compatibility, while fresh V2 scaffolding lives under `v2/`.
+
 Rixie is an LLM-powered book distiller. It reads your book (Markdown, EPUB, PDF, or text), breaks it into chunks, and runs each chunk through an LLM that extracts only the *functional* knowledge — mental models, actionable heuristics, bullshit detectors, and the one seed principle that rebuilds the whole argument.
 
 The output isn't a summary. It's a **cognitive upgrade** — what the book makes you *capable of*, not what it said.
@@ -76,6 +78,12 @@ Supported formats: `.md`, `.txt`, `.epub` (requires [pandoc](https://pandoc.org/
 
 ```bash
 uv run python process.py
+```
+
+That root command still runs the legacy V1 pipeline. To prepare the new V2 scaffold separately:
+
+```bash
+uv run python v2/process.py input/my_book.md
 ```
 
 That's the whole pipeline — chunk, distill, synthesize, export. It's resumable too: kill it anytime with Ctrl+C and re-run, it picks up where it left off.

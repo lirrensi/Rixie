@@ -10,6 +10,7 @@ llm:
   api_key: "local"                       # API key (use "local" for no auth)
   model: "gpt-4o-mini"                   # Model name
   temperature: 0.3                       # Creativity (0=deterministic, 1=chaos)
+  request_timeout_seconds: 300           # Per-call timeout (seconds)
 
 # ─── Chunking ───────────────────────────────────────────────
 chunking:
@@ -29,3 +30,25 @@ synthesis:
 output:
   generate_html: true        # Export HTML after synthesis
   generate_final: true       # Run final merge step
+
+# ─── V2 Progressive Pipeline ───────────────────────────────────
+v2:
+  blocking:
+    encoding_model: "gpt-4o-mini"  # Tokenizer model for synthetic page splitting
+    target_tokens: 1024             # Target synthetic-page size
+    min_tokens: 768                 # Prefer not to split below this unless needed
+    max_tokens: 1280                # Hard-ish cap before forcing a split
+  mapping:
+    mini_summary_model: null        # Falls back to llm.model
+    cartographer_model: null        # Falls back to llm.model
+    short_summary_model: null       # Falls back to llm.model
+    detailed_summary_model: null    # Falls back to llm.model
+    ultra_dense_model: null         # Falls back to llm.model
+    mini_summary_temperature: 0.1
+    cartographer_temperature: 0.1
+    short_summary_temperature: 0.2
+    detailed_summary_temperature: 0.25
+    ultra_dense_temperature: 0.2
+    request_timeout_seconds: 300    # Per-call timeout (seconds)
+  execution:
+    parallel_calls: 8               # Parallel lightweight LLM calls (set 1 for chunky/local runs)

@@ -1,6 +1,8 @@
 # User content — books, output, audio
 input/
 output/
+v2/books/
+v2/books-smoke*/
 *.mp3
 
 # Python
