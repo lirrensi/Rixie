@@ -108,6 +108,10 @@ def prepare_workspace(
     short_summary_settings: LLMSettings | None = None,
     detailed_summary_settings: LLMSettings | None = None,
     ultra_dense_settings: LLMSettings | None = None,
+    mini_summary_profile: dict | None = None,
+    cartography_profile: dict | None = None,
+    chapter_short_profile: dict | None = None,
+    chapter_long_profile: dict | None = None,
     parallel_calls: int = 8,
     max_blocks: int | None = None,
 ) -> tuple[Path, Path, Path]:
@@ -275,7 +279,6 @@ def main(argv: list[str] | None = None) -> int:
     short_summary_settings, chapter_short_profile = build_settings("chapter_short")
     detailed_summary_settings, chapter_long_profile = build_settings("chapter_long")
     ultra_dense_settings = short_summary_settings
-    overview_profile = profiles.get("overview", {})
     input_dir = INPUT_DIR.resolve()
     input_dir.mkdir(parents=True, exist_ok=True)
     books_dir.mkdir(parents=True, exist_ok=True)
@@ -313,6 +316,10 @@ def main(argv: list[str] | None = None) -> int:
                 short_summary_settings=short_summary_settings,
                 detailed_summary_settings=detailed_summary_settings,
                 ultra_dense_settings=ultra_dense_settings,
+                mini_summary_profile=mini_summary_profile,
+                cartography_profile=cartography_profile,
+                chapter_short_profile=chapter_short_profile,
+                chapter_long_profile=chapter_long_profile,
                 parallel_calls=int(execution.get("parallel_calls", 8)),
                 max_blocks=args.max_blocks or None,
             )
