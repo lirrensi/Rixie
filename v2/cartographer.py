@@ -137,20 +137,33 @@ def generate_block_mini_summaries(
     sys.stdout.flush()
 
     max_workers = max(1, parallel_calls)
-    print(f"   🔥 Processing {total} blocks one-by-one with {max_workers} workers...")
+    print(f"   🔥 Firing {total} requests in parallel ({max_workers} at a time)...")
     sys.stdout.flush()
 
-    # Fire ONE request at a time so user sees EVERYTHING
-    for idx, block in enumerate(artifact.blocks):
-        print(f"   📤 Request {idx+1}/{total}: {block.block_id} → calling {llm_settings.model}...")
-        sys.stdout.flush()
-        
-        result = _summarize_block(block.text or "", llm_settings, prompt_file)
-        
+    results: dict[int, MiniSummaryResult] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        pending = {}
+        for idx, block in enumerate(artifact.blocks):
+            f = executor.submit(_summarize_block, block.text or "", llm_settings, prompt_file)
+            pending[f] = idx
+            print(f"   📤 Sent {idx+1}/{total}: {block.block_id}")
+            sys.stdout.flush()
+
+        for future in as_completed(pending):
+            idx = pending[future]
+            try:
+                result = future.result()
+                results[idx] = result
+                print(f"   ✅ Done {len(results)}/{total}: {artifact.blocks[idx].block_id} → useful={result.useful}")
+                sys.stdout.flush()
+            except Exception as e:
+                results[idx] = _fallback_block_summary(artifact.blocks[idx].text or "")
+                print(f"   ❌ Fail {idx+1}/{total}: {artifact.blocks[idx].block_id} → {e}")
+                sys.stdout.flush()
+
+    for idx, result in sorted(results.items()):
         artifact.blocks[idx].mini_summary = result.mini_summary
         artifact.blocks[idx].useful = result.useful
-        print(f"   ✅ Response {idx+1}/{total}: {block.block_id} → useful={result.useful}")
-        sys.stdout.flush()
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
     stage.status = "done"

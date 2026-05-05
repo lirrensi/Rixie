@@ -113,34 +113,36 @@ def summarize_chapters(
         for idx, chapter in enumerate(artifact.chapters)
     ]
     max_workers = max(1, parallel_calls)
-    print(f"   🔥 Running {len(chapter_payloads)} short summaries...")
+    print(f"   🔥 Firing {len(chapter_payloads)} short summaries ({max_workers} parallel)...")
+    sys.stdout.flush()
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        short_jobs = {
-            executor.submit(_summarize_short, title, text, short_settings, short_prompt_file): idx
-            for idx, title, text in chapter_payloads
-        }
-        completed = 0
-        for future in as_completed(short_jobs):
-            idx = short_jobs[future]
+        pending_short = {}
+        for idx, title, text in chapter_payloads:
+            f = executor.submit(_summarize_short, title, text, short_settings, short_prompt_file)
+            pending_short[f] = idx
+            print(f"   📤 short sent: {title}")
+            sys.stdout.flush()
+        for future in as_completed(pending_short):
+            idx = pending_short[future]
             artifact.chapters[idx].short_summary = future.result()
-            completed += 1
-            print(f"   • short {completed}/{len(chapter_payloads)}: {artifact.chapters[idx].title}")
+            print(f"   ✅ short done: {artifact.chapters[idx].title}")
             sys.stdout.flush()
 
-    print(f"   🔥 Running {len(chapter_payloads)} detailed summaries...")
+    print(f"   🔥 Firing {len(chapter_payloads)} detailed summaries ({max_workers} parallel)...")
+    sys.stdout.flush()
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        detailed_jobs = {
-            executor.submit(_summarize_detailed, title, text, detailed_settings, detailed_prompt_file): idx
-            for idx, title, text in chapter_payloads
-        }
-        completed = 0
-        for future in as_completed(detailed_jobs):
-            idx = detailed_jobs[future]
+        pending_detail = {}
+        for idx, title, text in chapter_payloads:
+            f = executor.submit(_summarize_detailed, title, text, detailed_settings, detailed_prompt_file)
+            pending_detail[f] = idx
+            print(f"   📤 detail sent: {title}")
+            sys.stdout.flush()
+        for future in as_completed(pending_detail):
+            idx = pending_detail[future]
             artifact.chapters[idx].detailed_summary = future.result()
-            completed += 1
-            print(f"   • detail {completed}/{len(chapter_payloads)}: {artifact.chapters[idx].title}")
+            print(f"   ✅ detail done: {artifact.chapters[idx].title}")
             sys.stdout.flush()
 
     print(f"   ✅ Chapter summaries complete: {len(artifact.chapters)} chapters")
