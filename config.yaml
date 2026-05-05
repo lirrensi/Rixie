@@ -33,22 +33,55 @@ output:
 
 # ─── V2 Progressive Pipeline ───────────────────────────────────
 v2:
+  defaults:
+    base_url: "http://localhost:58080/v1"  # Shared OpenAI-compatible endpoint
+    api_key: "local"                       # Shared API key (use "local" for no auth)
+    model: "gpt-4o-mini"                   # Shared default model
+    temperature: 0.2                       # Shared default temperature
+    request_timeout_seconds: 300           # Shared per-call timeout (seconds)
+    thinking: true                         # Default thinking enabled
+
+  profiles:
+    mini_summary:
+      prompt_file: "prompt_block_mini_summary.md"
+      temperature: 0.1
+      thinking: false
+      # model: null
+      # base_url: null
+      # api_key: null
+      # request_timeout_seconds: 300
+
+    cartography:
+      prompt_file: "prompt_cartographer_map.md"
+      thinking: true
+      # model: null
+      # temperature: 0.1
+      # base_url: null
+      # api_key: null
+      # request_timeout_seconds: 300
+
+    chapter_short:
+      prompt_file: "prompt_chapter_short.md"
+      temperature: 0.2
+      thinking: true
+      # model: null
+      # base_url: null
+      # api_key: null
+      # request_timeout_seconds: 300
+
+    chapter_long:
+      prompt_file: "prompt_chapter_detailed.md"
+      temperature: 0.25
+      thinking: true
+      # model: null
+      # base_url: null
+      # api_key: null
+      # request_timeout_seconds: 300
+
   blocking:
     encoding_model: "gpt-4o-mini"  # Tokenizer model for synthetic page splitting
     target_tokens: 1024             # Target synthetic-page size
     min_tokens: 768                 # Prefer not to split below this unless needed
     max_tokens: 1280                # Hard-ish cap before forcing a split
-  mapping:
-    mini_summary_model: null        # Falls back to llm.model
-    cartographer_model: null        # Falls back to llm.model
-    short_summary_model: null       # Falls back to llm.model
-    detailed_summary_model: null    # Falls back to llm.model
-    ultra_dense_model: null         # Falls back to llm.model
-    mini_summary_temperature: 0.1
-    cartographer_temperature: 0.1
-    short_summary_temperature: 0.2
-    detailed_summary_temperature: 0.25
-    ultra_dense_temperature: 0.2
-    request_timeout_seconds: 300    # Per-call timeout (seconds)
   execution:
     parallel_calls: 8               # Parallel lightweight LLM calls (set 1 for chunky/local runs)

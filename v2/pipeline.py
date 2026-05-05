@@ -13,12 +13,20 @@ from litellm import completion
 from v2.schema import BookArtifact, StageState
 
 
-def build_completion_kwargs(model: str, messages: list[dict], temperature: float = 0.2) -> dict:
-    return {
+def build_completion_kwargs(
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.2,
+    thinking: bool = True,
+) -> dict:
+    kwargs = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
     }
+    if thinking:
+        kwargs["reasoning_effort"] = "high"
+    return kwargs
 
 
 @dataclass

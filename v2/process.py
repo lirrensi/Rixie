@@ -18,7 +18,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from v2.cartographer import LLMSettings, generate_block_mini_summaries, group_blocks_into_chapters, map_book_structure
-from v2.config import load_repo_config, load_v2_config
+from v2.config import load_repo_config, load_v2_config, resolve_profile
 from v2.ingest import detect_format, ingest_source
 from v2.renderer import render_outputs
 from v2.schema import BookArtifact, DocumentMetadata, StageState
@@ -168,6 +168,7 @@ def prepare_workspace(
             artifact,
             llm_settings=mini_summary_settings,
             parallel_calls=parallel_calls,
+            prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["mini_summaries"].status == "done":
@@ -178,6 +179,7 @@ def prepare_workspace(
         artifact = group_blocks_into_chapters(
             artifact,
             llm_settings=cartographer_settings,
+            prompt_file=str(cartography_profile.get("prompt_file", "prompt_cartographer_map.md")),
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.chapters:
@@ -192,6 +194,8 @@ def prepare_workspace(
             short_settings=short_summary_settings,
             detailed_settings=detailed_summary_settings,
             parallel_calls=parallel_calls,
+            short_prompt_file=str(chapter_short_profile.get("prompt_file", "prompt_chapter_short.md")),
+            detailed_prompt_file=str(chapter_long_profile.get("prompt_file", "prompt_chapter_detailed.md")),
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["chapter_summaries"].status == "done":
@@ -202,6 +206,7 @@ def prepare_workspace(
         artifact = synthesize_overview(
             artifact,
             ultra_dense_settings=ultra_dense_settings,
+            prompt_file=str(overview_profile.get("prompt_file", "prompt_ultra_dense.md")),
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["overview"].status == "done":
@@ -238,47 +243,39 @@ def main(argv: list[str] | None = None) -> int:
     llm_config = repo_config.get("llm", {})
     v2_config = load_v2_config()
     blocking = v2_config.get("blocking", {})
-    mapping = v2_config.get("mapping", {})
+    defaults = v2_config.get("defaults", {})
+    profiles = v2_config.get("profiles", {})
     execution = v2_config.get("execution", {})
 
     base_model = str(llm_config.get("model", "gpt-4o-mini"))
     api_base = llm_config.get("base_url")
     api_key = llm_config.get("api_key")
-    mini_summary_settings = LLMSettings(
-        model=str(mapping.get("mini_summary_model") or base_model),
-        temperature=float(mapping.get("mini_summary_temperature", llm_config.get("temperature", 0.1))),
-        api_base=api_base,
-        api_key=api_key,
-        timeout=int(mapping.get("request_timeout_seconds", 300)),
-    )
-    cartographer_settings = LLMSettings(
-        model=str(mapping.get("cartographer_model") or base_model),
-        temperature=float(mapping.get("cartographer_temperature", llm_config.get("temperature", 0.1))),
-        api_base=api_base,
-        api_key=api_key,
-        timeout=int(mapping.get("request_timeout_seconds", 300)),
-    )
-    short_summary_settings = LLMSettings(
-        model=str(mapping.get("short_summary_model") or base_model),
-        temperature=float(mapping.get("short_summary_temperature", llm_config.get("temperature", 0.2))),
-        api_base=api_base,
-        api_key=api_key,
-        timeout=int(mapping.get("request_timeout_seconds", 300)),
-    )
-    detailed_summary_settings = LLMSettings(
-        model=str(mapping.get("detailed_summary_model") or base_model),
-        temperature=float(mapping.get("detailed_summary_temperature", llm_config.get("temperature", 0.25))),
-        api_base=api_base,
-        api_key=api_key,
-        timeout=int(mapping.get("request_timeout_seconds", 300)),
-    )
-    ultra_dense_settings = LLMSettings(
-        model=str(mapping.get("ultra_dense_model") or base_model),
-        temperature=float(mapping.get("ultra_dense_temperature", llm_config.get("temperature", 0.2))),
-        api_base=api_base,
-        api_key=api_key,
-        timeout=int(mapping.get("request_timeout_seconds", 300)),
-    )
+
+    default_base_url = defaults.get("base_url", api_base)
+    default_api_key = defaults.get("api_key", api_key)
+    default_model = defaults.get("model", base_model)
+    default_temperature = defaults.get("temperature", llm_config.get("temperature", 0.2))
+    default_timeout = int(defaults.get("request_timeout_seconds", 300))
+    default_thinking = bool(defaults.get("thinking", True))
+
+    def build_settings(profile_name: str) -> tuple[LLMSettings, dict]:
+        profile = resolve_profile(v2_config, profile_name)
+        settings = LLMSettings(
+            model=str(profile.get("model") or default_model),
+            temperature=float(profile.get("temperature") if profile.get("temperature") is not None else default_temperature),
+            api_base=profile.get("base_url") or default_base_url,
+            api_key=profile.get("api_key") or default_api_key,
+            timeout=int(profile.get("request_timeout_seconds") or default_timeout),
+            thinking=bool(profile.get("thinking") if profile.get("thinking") is not None else default_thinking),
+        )
+        return settings, profile
+
+    mini_summary_settings, mini_summary_profile = build_settings("mini_summary")
+    cartographer_settings, cartography_profile = build_settings("cartography")
+    short_summary_settings, chapter_short_profile = build_settings("chapter_short")
+    detailed_summary_settings, chapter_long_profile = build_settings("chapter_long")
+    ultra_dense_settings = short_summary_settings
+    overview_profile = profiles.get("overview", {})
     input_dir = INPUT_DIR.resolve()
     input_dir.mkdir(parents=True, exist_ok=True)
     books_dir.mkdir(parents=True, exist_ok=True)

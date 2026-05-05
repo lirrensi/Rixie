@@ -16,24 +16,57 @@ CONFIG_PATH = REPO_ROOT / "config.yaml"
 
 DEFAULT_V2_CONFIG: dict = {
     "v2": {
+        "defaults": {
+            "base_url": None,
+            "api_key": None,
+            "model": None,
+            "temperature": None,
+            "request_timeout_seconds": 300,
+            "thinking": True,
+        },
+        "profiles": {
+            "mini_summary": {
+                "prompt_file": "prompt_block_mini_summary.md",
+                "model": None,
+                "temperature": 0.1,
+                "request_timeout_seconds": 300,
+                "thinking": False,
+                # "base_url": None,
+                # "api_key": None,
+            },
+            "cartography": {
+                "prompt_file": "prompt_cartographer_map.md",
+                "model": None,
+                "temperature": 0.1,
+                "request_timeout_seconds": 300,
+                "thinking": True,
+                # "base_url": None,
+                # "api_key": None,
+            },
+            "chapter_short": {
+                "prompt_file": "prompt_chapter_short.md",
+                "model": None,
+                "temperature": 0.2,
+                "request_timeout_seconds": 300,
+                "thinking": True,
+                # "base_url": None,
+                # "api_key": None,
+            },
+            "chapter_long": {
+                "prompt_file": "prompt_chapter_detailed.md",
+                "model": None,
+                "temperature": 0.25,
+                "request_timeout_seconds": 300,
+                "thinking": True,
+                # "base_url": None,
+                # "api_key": None,
+            },
+        },
         "blocking": {
             "encoding_model": "gpt-4o-mini",
             "target_tokens": 1024,
             "min_tokens": 768,
             "max_tokens": 1280,
-        },
-        "mapping": {
-            "mini_summary_model": None,
-            "cartographer_model": None,
-            "short_summary_model": None,
-            "detailed_summary_model": None,
-            "ultra_dense_model": None,
-            "mini_summary_temperature": 0.1,
-            "cartographer_temperature": 0.1,
-            "short_summary_temperature": 0.2,
-            "detailed_summary_temperature": 0.25,
-            "ultra_dense_temperature": 0.2,
-            "request_timeout_seconds": 300,
         },
         "execution": {
             "parallel_calls": 8,
@@ -65,3 +98,9 @@ def load_v2_config(config_path: Path | None = None) -> dict:
     loaded = load_repo_config(config_path)
     merged = _deep_merge(DEFAULT_V2_CONFIG, loaded)
     return merged.get("v2", deepcopy(DEFAULT_V2_CONFIG["v2"]))
+
+
+def resolve_profile(v2_config: dict, profile_name: str) -> dict:
+    defaults = deepcopy(v2_config.get("defaults", {}))
+    profile = deepcopy(v2_config.get("profiles", {}).get(profile_name, {}))
+    return _deep_merge(defaults, profile)

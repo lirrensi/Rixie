@@ -18,14 +18,23 @@ OVERVIEW_STAGE = "overview"
 
 
 def _call_text(messages: list[dict], settings: LLMSettings) -> str:
-    kwargs = build_completion_kwargs(settings.model, messages, temperature=settings.temperature)
+    kwargs = build_completion_kwargs(
+        settings.model,
+        messages,
+        temperature=settings.temperature,
+        thinking=settings.thinking,
+    )
     if settings.api_base:
         kwargs["api_base"] = settings.api_base
     if settings.api_key:
         kwargs["api_key"] = settings.api_key
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
-    response = completion(**kwargs)
+    try:
+        response = completion(**kwargs)
+    except Exception:
+        kwargs.pop("reasoning_effort", None)
+        response = completion(**kwargs)
     return (response.choices[0].message.content or "").strip()
 
 
@@ -49,8 +58,8 @@ def _fallback_detailed_summary(chapter_title: str, source_text: str) -> str:
     return f"{chapter_title}. {compact[:900].strip()}" + ("…" if len(compact) > 900 else "")
 
 
-def _summarize_short(chapter_title: str, source_text: str, settings: LLMSettings) -> str:
-    system = load_prompt("prompt_chapter_short.md")
+def _summarize_short(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str:
+    system = load_prompt(prompt_file)
     user = f"CHAPTER TITLE: {chapter_title}\n\nSOURCE TEXT:\n{source_text}"
     try:
         result = _call_text(
@@ -65,8 +74,8 @@ def _summarize_short(chapter_title: str, source_text: str, settings: LLMSettings
         return _fallback_short_summary(chapter_title, source_text)
 
 
-def _summarize_detailed(chapter_title: str, source_text: str, settings: LLMSettings) -> str:
-    system = load_prompt("prompt_chapter_detailed.md")
+def _summarize_detailed(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str:
+    system = load_prompt(prompt_file)
     user = f"CHAPTER TITLE: {chapter_title}\n\nSOURCE TEXT:\n{source_text}"
     try:
         result = _call_text(
@@ -87,6 +96,8 @@ def summarize_chapters(
     short_settings: LLMSettings,
     detailed_settings: LLMSettings,
     parallel_calls: int = 8,
+    short_prompt_file: str = "prompt_chapter_short.md",
+    detailed_prompt_file: str = "prompt_chapter_detailed.md",
 ) -> BookArtifact:
     artifact.stages.setdefault(CHAPTER_SUMMARIES_STAGE, StageState(name=CHAPTER_SUMMARIES_STAGE))
     stage = artifact.stages[CHAPTER_SUMMARIES_STAGE]
@@ -103,7 +114,7 @@ def summarize_chapters(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         short_jobs = {
-            executor.submit(_summarize_short, title, text, short_settings): idx
+            executor.submit(_summarize_short, title, text, short_settings, short_prompt_file): idx
             for idx, title, text in chapter_payloads
         }
         completed = 0
@@ -115,7 +126,7 @@ def summarize_chapters(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         detailed_jobs = {
-            executor.submit(_summarize_detailed, title, text, detailed_settings): idx
+            executor.submit(_summarize_detailed, title, text, detailed_settings, detailed_prompt_file): idx
             for idx, title, text in chapter_payloads
         }
         completed = 0
@@ -144,6 +155,7 @@ def synthesize_overview(
     artifact: BookArtifact,
     *,
     ultra_dense_settings: LLMSettings,
+    prompt_file: str = "prompt_ultra_dense.md",
 ) -> BookArtifact:
     artifact.stages.setdefault(OVERVIEW_STAGE, StageState(name=OVERVIEW_STAGE))
     stage = artifact.stages[OVERVIEW_STAGE]
@@ -161,7 +173,7 @@ def synthesize_overview(
             [
                 {
                     "role": "system",
-                    "content": load_prompt("prompt_ultra_dense.md"),
+                    "content": load_prompt(prompt_file),
                 },
                 {"role": "user", "content": chapter_summaries},
             ],

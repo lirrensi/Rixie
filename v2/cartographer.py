@@ -44,6 +44,7 @@ class LLMSettings:
     api_base: str | None = None
     api_key: str | None = None
     timeout: int | None = None
+    thinking: bool = True
 
 
 def _extract_json_object(text: str) -> str:
@@ -63,14 +64,23 @@ def _extract_json_object(text: str) -> str:
 
 
 def _call_json(messages: list[dict], settings: LLMSettings) -> dict:
-    kwargs = build_completion_kwargs(settings.model, messages, temperature=settings.temperature)
+    kwargs = build_completion_kwargs(
+        settings.model,
+        messages,
+        temperature=settings.temperature,
+        thinking=settings.thinking,
+    )
     if settings.api_base:
         kwargs["api_base"] = settings.api_base
     if settings.api_key:
         kwargs["api_key"] = settings.api_key
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
-    response = completion(**kwargs)
+    try:
+        response = completion(**kwargs)
+    except Exception:
+        kwargs.pop("reasoning_effort", None)
+        response = completion(**kwargs)
     content = response.choices[0].message.content or ""
     return json.loads(_extract_json_object(content))
 
@@ -90,8 +100,8 @@ def _fallback_block_summary(text: str) -> MiniSummaryResult:
     )
 
 
-def _summarize_block(block_text: str, settings: LLMSettings) -> MiniSummaryResult:
-    system = load_prompt("prompt_block_mini_summary.md")
+def _summarize_block(block_text: str, settings: LLMSettings, prompt_file: str) -> MiniSummaryResult:
+    system = load_prompt(prompt_file)
     user = f"BLOCK:\n{block_text}"
     try:
         parsed = MiniSummaryResult.model_validate(
@@ -114,6 +124,7 @@ def generate_block_mini_summaries(
     *,
     llm_settings: LLMSettings,
     parallel_calls: int = 8,
+    prompt_file: str = "prompt_block_mini_summary.md",
 ) -> BookArtifact:
     artifact.stages.setdefault(MINI_SUMMARIES_STAGE, StageState(name=MINI_SUMMARIES_STAGE))
     stage = artifact.stages[MINI_SUMMARIES_STAGE]
@@ -126,7 +137,7 @@ def generate_block_mini_summaries(
     max_workers = max(1, parallel_calls)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
-            executor.submit(_summarize_block, block.text or "", llm_settings): idx
+            executor.submit(_summarize_block, block.text or "", llm_settings, prompt_file): idx
             for idx, block in enumerate(artifact.blocks)
         }
         completed = 0
@@ -209,6 +220,7 @@ def group_blocks_into_chapters(
     artifact: BookArtifact,
     *,
     llm_settings: LLMSettings,
+    prompt_file: str = "prompt_cartographer_map.md",
 ) -> BookArtifact:
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
@@ -226,7 +238,7 @@ def group_blocks_into_chapters(
         summary = block.mini_summary or ""
         block_lines.append(f"{block.block_id}: {summary}")
 
-    system = load_prompt("prompt_cartographer_map.md")
+    system = load_prompt(prompt_file)
     user = "ORDERED BLOCK SUMMARIES:\n" + "\n".join(block_lines)
 
     try:
