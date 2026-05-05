@@ -6,16 +6,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+from litellm import acompletion
 from pydantic import BaseModel, ValidationError
 
 from v2.blocker import build_blocks
-from v2.pipeline import build_completion_kwargs, completion
+from v2.pipeline import build_completion_kwargs
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, ChapterArtifact, StageState
 
@@ -64,7 +65,7 @@ def _extract_json_object(text: str) -> str:
     return stripped[start : end + 1]
 
 
-def _call_json(messages: list[dict], settings: LLMSettings) -> dict:
+async def _call_json_async(messages: list[dict], settings: LLMSettings) -> dict:
     kwargs = build_completion_kwargs(
         settings.model,
         messages,
@@ -78,10 +79,10 @@ def _call_json(messages: list[dict], settings: LLMSettings) -> dict:
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
     try:
-        response = completion(**kwargs)
+        response = await acompletion(**kwargs)
     except Exception:
         kwargs.pop("reasoning_effort", None)
-        response = completion(**kwargs)
+        response = await acompletion(**kwargs)
     content = response.choices[0].message.content or ""
     return json.loads(_extract_json_object(content))
 
@@ -90,7 +91,7 @@ def _fallback_block_summary(text: str) -> MiniSummaryResult:
     clean = " ".join((text or "").split())
     short = clean[:220].strip()
     if len(clean) > 220:
-        short += "…"
+        short += "\u2026"
     useful = not any(
         marker in clean.lower()
         for marker in ["table of contents", "copyright", "references", "bibliography", "index"]
@@ -101,12 +102,12 @@ def _fallback_block_summary(text: str) -> MiniSummaryResult:
     )
 
 
-def _summarize_block(block_text: str, settings: LLMSettings, prompt_file: str) -> MiniSummaryResult:
+async def _summarize_block_async(block_text: str, settings: LLMSettings, prompt_file: str) -> MiniSummaryResult:
     system = load_prompt(prompt_file)
     user = f"BLOCK:\n{block_text}"
     try:
         parsed = MiniSummaryResult.model_validate(
-            _call_json(
+            await _call_json_async(
                 [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
@@ -120,7 +121,7 @@ def _summarize_block(block_text: str, settings: LLMSettings, prompt_file: str) -
         return _fallback_block_summary(block_text)
 
 
-def generate_block_mini_summaries(
+async def generate_block_mini_summaries(
     artifact: BookArtifact,
     *,
     llm_settings: LLMSettings,
@@ -133,35 +134,36 @@ def generate_block_mini_summaries(
     stage.notes = "Generating one-sentence block summaries and useful=false classifications."
 
     total = len(artifact.blocks)
-    print(f"   🔎 Mini summaries: {total} block(s)")
+    print(f"   \U0001f50e Mini summaries: {total} block(s)")
     sys.stdout.flush()
 
-    max_workers = max(1, parallel_calls)
-    print(f"   🔥 Firing {total} requests in parallel ({max_workers} at a time)...")
+    sem = asyncio.Semaphore(parallel_calls)
+    print(f"   \U0001f525 Firing {total} requests ({parallel_calls} concurrent)...")
     sys.stdout.flush()
 
-    results: dict[int, MiniSummaryResult] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        pending = {}
-        for idx, block in enumerate(artifact.blocks):
-            f = executor.submit(_summarize_block, block.text or "", llm_settings, prompt_file)
-            pending[f] = idx
-            print(f"   📤 Sent {idx+1}/{total}: {block.block_id}")
+    async def _do_one(idx: int, block) -> tuple[int, MiniSummaryResult]:
+        print(f"   \U0001f4e4 Sent {idx+1}/{total}: {block.block_id}")
+        sys.stdout.flush()
+        try:
+            result = await _summarize_block_async(block.text or "", llm_settings, prompt_file)
+            print(f"   \u2705 Done {idx+1}/{total}: {block.block_id} \u2192 useful={result.useful}")
             sys.stdout.flush()
+            return idx, result
+        except Exception as e:
+            fallback = _fallback_block_summary(block.text or "")
+            print(f"   \u274c Fail {idx+1}/{total}: {block.block_id} \u2192 {e}")
+            sys.stdout.flush()
+            return idx, fallback
 
-        for future in as_completed(pending):
-            idx = pending[future]
-            try:
-                result = future.result()
-                results[idx] = result
-                print(f"   ✅ Done {len(results)}/{total}: {artifact.blocks[idx].block_id} → useful={result.useful}")
-                sys.stdout.flush()
-            except Exception as e:
-                results[idx] = _fallback_block_summary(artifact.blocks[idx].text or "")
-                print(f"   ❌ Fail {idx+1}/{total}: {artifact.blocks[idx].block_id} → {e}")
-                sys.stdout.flush()
+    # Gate concurrency with semaphore
+    async def _throttled(idx: int, block) -> tuple[int, MiniSummaryResult]:
+        async with sem:
+            return await _do_one(idx, block)
 
-    for idx, result in sorted(results.items()):
+    tasks = [_throttled(idx, block) for idx, block in enumerate(artifact.blocks)]
+    results = await asyncio.gather(*tasks)
+
+    for idx, result in sorted(results):
         artifact.blocks[idx].mini_summary = result.mini_summary
         artifact.blocks[idx].useful = result.useful
 
@@ -171,7 +173,7 @@ def generate_block_mini_summaries(
         "block_count": len(artifact.blocks),
         "useful_blocks": useful_blocks,
         "skipped_blocks": len(artifact.blocks) - useful_blocks,
-        "parallel_calls": max_workers,
+        "parallel_calls": parallel_calls,
         "model": llm_settings.model,
     }
     return artifact.touch()
@@ -232,7 +234,7 @@ def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: l
     return chapters
 
 
-def group_blocks_into_chapters(
+async def group_blocks_into_chapters(
     artifact: BookArtifact,
     *,
     llm_settings: LLMSettings,
@@ -241,7 +243,7 @@ def group_blocks_into_chapters(
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
     useful_blocks = [block for block in artifact.blocks if block.useful is not False]
-    print(f"   🧭 Cartographer: {len(useful_blocks)} useful blocks out of {len(artifact.blocks)} total")
+    print(f"   \U0001f9ed Cartographer: {len(useful_blocks)} useful blocks out of {len(artifact.blocks)} total")
     if not useful_blocks:
         artifact.chapters = []
         stage.status = "done"
@@ -249,22 +251,20 @@ def group_blocks_into_chapters(
         stage.outputs = {**stage.outputs, "chapter_count": 0}
         return artifact.touch()
 
-    print(f"   📋 Building block list for LLM...")
+    print("   \U0001f4cb Building block list for LLM...")
     block_lines = []
     for block in useful_blocks:
         summary = block.mini_summary or ""
         block_lines.append(f"{block.block_id}: {summary}")
 
-    print(f"   🤖 Calling {llm_settings.model} to group into chapters...")
-    system = load_prompt(prompt_file)
-    user = "ORDERED BLOCK SUMMARIES:\n" + "\n".join(block_lines)
-
+    print(f"   \U0001f916 Calling {llm_settings.model} to group into chapters...")
+    sys.stdout.flush()
     system = load_prompt(prompt_file)
     user = "ORDERED BLOCK SUMMARIES:\n" + "\n".join(block_lines)
 
     try:
         parsed = ChapterMapResult.model_validate(
-            _call_json(
+            await _call_json_async(
                 [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
@@ -280,7 +280,7 @@ def group_blocks_into_chapters(
         stage.notes = "Cartographer LLM output failed validation; used deterministic fallback grouping."
 
     stage.status = "done"
-    print(f"   ✅ Cartographer mapped {len(artifact.chapters)} chapter(s)")
+    print(f"   \u2705 Cartographer mapped {len(artifact.chapters)} chapter(s)")
     stage.outputs = {
         **stage.outputs,
         "chapter_count": len(artifact.chapters),
@@ -298,7 +298,7 @@ def map_book_structure(
     max_tokens: int = 1280,
     encoding_model: str = "gpt-4o-mini",
 ) -> BookArtifact:
-    print(f"   📊 Tokenizing with {encoding_model}...")
+    print(f"   \U0001f4ca Tokenizing with {encoding_model}...")
     artifact.stages.setdefault(CARTOGRAPHY_STAGE, StageState(name=CARTOGRAPHY_STAGE))
     artifact.blocks = build_blocks(
         source_text,
@@ -307,7 +307,7 @@ def map_book_structure(
         max_tokens=max_tokens,
         encoding_model=encoding_model,
     )
-    print(f"   ✂️  Split into {len(artifact.blocks)} blocks")
+    print(f"   \u2702\ufe0f  Split into {len(artifact.blocks)} blocks")
     artifact.stages[CARTOGRAPHY_STAGE].notes = (
         "Block anchors generated. TODO: create mini-summaries and group them into chapters."
     )

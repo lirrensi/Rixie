@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import re
 import signal
@@ -115,6 +116,7 @@ def prepare_workspace(
     cartography_profile: dict | None = None,
     chapter_short_profile: dict | None = None,
     chapter_long_profile: dict | None = None,
+    overview_profile: dict | None = None,
     parallel_calls: int = 8,
     max_blocks: int | None = None,
 ) -> tuple[Path, Path, Path]:
@@ -176,27 +178,26 @@ def prepare_workspace(
 
     if mini_summary_settings and artifact.blocks and artifact.stages["mini_summaries"].status != "done":
         print("   [3/6] Generating block mini summaries...")
-        print(f"   → Using {mini_summary_settings.model} with {parallel_calls} parallel calls")
-        artifact = generate_block_mini_summaries(
+        print(f"   \u2192 Using {mini_summary_settings.model} with {parallel_calls} parallel calls")
+        artifact = asyncio.run(generate_block_mini_summaries(
             artifact,
             llm_settings=mini_summary_settings,
             parallel_calls=parallel_calls,
             prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
-        )
+        ))
         useful = sum(1 for b in artifact.blocks if b.useful)
-        print(f"   ✅ Mini summaries done: {useful}/{len(artifact.blocks)} useful")
-    elif artifact.stages["mini_summaries"].status == "done":
+        print(f"   \u2705 Mini summaries done: {useful}/{len(artifact.blocks)} useful")
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["mini_summaries"].status == "done":
         print("   [3/6] Mini summaries skipped (already complete)")
 
     if cartographer_settings and artifact.blocks and not artifact.chapters:
         print("   [4/6] Grouping blocks into chapters...")
-        artifact = group_blocks_into_chapters(
+        artifact = asyncio.run(group_blocks_into_chapters(
             artifact,
             llm_settings=cartographer_settings,
             prompt_file=str(cartography_profile.get("prompt_file", "prompt_cartographer_map.md")),
-        )
+        ))
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.chapters:
         print(f"   [4/6] Chapter grouping skipped ({len(artifact.chapters)} chapters already mapped)")
@@ -205,25 +206,25 @@ def prepare_workspace(
 
     if short_summary_settings and detailed_summary_settings and artifact.chapters and artifact.stages["chapter_summaries"].status != "done":
         print("   [5/6] Writing chapter summaries...")
-        artifact = summarize_chapters(
+        artifact = asyncio.run(summarize_chapters(
             artifact,
             short_settings=short_summary_settings,
             detailed_settings=detailed_summary_settings,
             parallel_calls=parallel_calls,
             short_prompt_file=str(chapter_short_profile.get("prompt_file", "prompt_chapter_short.md")),
             detailed_prompt_file=str(chapter_long_profile.get("prompt_file", "prompt_chapter_detailed.md")),
-        )
+        ))
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["chapter_summaries"].status == "done":
         print("   [5/6] Chapter summaries skipped (already complete)")
 
     if ultra_dense_settings and artifact.chapters and artifact.stages["overview"].status != "done":
         print("   [6/6] Building abstract...")
-        artifact = synthesize_overview(
+        artifact = asyncio.run(synthesize_overview(
             artifact,
             ultra_dense_settings=ultra_dense_settings,
             prompt_file=str(overview_profile.get("prompt_file", "prompt_ultra_dense.md")),
-        )
+        ))
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["overview"].status == "done":
         print("   [6/6] Abstract skipped (already complete)")
@@ -298,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     short_summary_settings, chapter_short_profile = build_settings("chapter_short")
     detailed_summary_settings, chapter_long_profile = build_settings("chapter_long")
     ultra_dense_settings = short_summary_settings
+    overview_profile = profiles.get("overview", {})
     input_dir = INPUT_DIR.resolve()
     input_dir.mkdir(parents=True, exist_ok=True)
     books_dir.mkdir(parents=True, exist_ok=True)
@@ -339,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                 cartography_profile=cartography_profile,
                 chapter_short_profile=chapter_short_profile,
                 chapter_long_profile=chapter_long_profile,
+                overview_profile=overview_profile,
                 parallel_calls=int(execution.get("parallel_calls", 8)),
                 max_blocks=args.max_blocks or None,
             )
