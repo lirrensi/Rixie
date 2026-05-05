@@ -137,25 +137,20 @@ def generate_block_mini_summaries(
     sys.stdout.flush()
 
     max_workers = max(1, parallel_calls)
-    print(f"   🚀 Submitting {total} parallel requests to {llm_settings.model}...")
+    print(f"   🔥 Processing {total} blocks one-by-one with {max_workers} workers...")
     sys.stdout.flush()
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {
-            executor.submit(_summarize_block, block.text or "", llm_settings, prompt_file): idx
-            for idx, block in enumerate(artifact.blocks)
-        }
-        print(f"   ⏳ Waiting for {total} responses...")
+    # Fire ONE request at a time so user sees EVERYTHING
+    for idx, block in enumerate(artifact.blocks):
+        print(f"   📤 Request {idx+1}/{total}: {block.block_id} → calling {llm_settings.model}...")
         sys.stdout.flush()
-        completed = 0
-        for future in as_completed(future_map):
-            idx = future_map[future]
-            result = future.result()
-            artifact.blocks[idx].mini_summary = result.mini_summary
-            artifact.blocks[idx].useful = result.useful
-            completed += 1
-            print(f"   • mini {completed}/{total}: {artifact.blocks[idx].block_id} → useful={result.useful}")
-            sys.stdout.flush()
+        
+        result = _summarize_block(block.text or "", llm_settings, prompt_file)
+        
+        artifact.blocks[idx].mini_summary = result.mini_summary
+        artifact.blocks[idx].useful = result.useful
+        print(f"   ✅ Response {idx+1}/{total}: {block.block_id} → useful={result.useful}")
+        sys.stdout.flush()
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
     stage.status = "done"
