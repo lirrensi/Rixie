@@ -78,7 +78,11 @@ async def _call_json_async(messages: list[dict], settings: LLMSettings) -> dict:
         kwargs["api_key"] = settings.api_key
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
-    response = await acompletion(**kwargs)
+    try:
+        response = await acompletion(**kwargs)
+    except Exception:
+        kwargs.pop("reasoning_effort", None)
+        response = await acompletion(**kwargs)
     content = response.choices[0].message.content or ""
     return json.loads(_extract_json_object(content))
 

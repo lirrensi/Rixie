@@ -39,6 +39,8 @@ def build_completion_kwargs(
         "messages": messages,
         "temperature": temperature,
     }
+    if thinking:
+        kwargs["reasoning_effort"] = "high"
     return kwargs
 
 
