@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import signal
+import sys
 from pathlib import Path
 
 import yaml
@@ -232,6 +235,13 @@ def prepare_workspace(
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Ctrl-C kills EVERYTHING immediately - no background, no continue
+    def _force_stop(signum, frame):
+        print("\n\n🛑 FORCE STOPPED - terminated immediately")
+        os._exit(130)
+    signal.signal(signal.SIGINT, _force_stop)
+    signal.signal(signal.SIGTERM, _force_stop)
+
     parser = argparse.ArgumentParser(description="Prepare a V2 per-book workspace scaffold.")
     parser.add_argument(
         "sources",
