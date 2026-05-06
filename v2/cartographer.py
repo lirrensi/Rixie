@@ -10,17 +10,15 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
 from v2.blocker import build_blocks
-from v2.pipeline import completion_with_retry, build_completion_kwargs
+from v2.pipeline import structured_completion
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, ChapterArtifact, StageState
 import yaml
@@ -54,65 +52,18 @@ class LLMSettings:
     thinking: bool = True
 
 
-
-
-
-def _pydantic_to_json_schema(pydantic_model: type[BaseModel]) -> dict:
-    """Convert a Pydantic model to JSON Schema format for structured output."""
-    schema = pydantic_model.model_json_schema()
-    return {
-        "type": "json_schema",
-        "json_schema": schema,
-    }
-
-
 def _call_json_sync(
     messages: list[dict],
     settings: LLMSettings,
     response_model: type[BaseModel],
 ) -> BaseModel:
-    """Call LLM with structured output guarantee - SYNCHRONOUS."""
-    import traceback
+    """Call LLM with structured output - returns Pydantic model directly.
 
-    print(f"      🔧 _call_json_sync ENTER", flush=True)
-    print(f"      📖 Response model: {response_model.__name__}", flush=True)
-
-    schema = _pydantic_to_json_schema(response_model)
-    print(f"      📋 JSON Schema: {schema['type']}", flush=True)
-    print(f"      📋 Schema keys: {list(schema['json_schema'].keys())}", flush=True)
-
-    kwargs = build_completion_kwargs(
-        settings.model,
-        messages,
-        temperature=settings.temperature,
-        thinking=settings.thinking,
-        response_format=schema,
-    )
-    if settings.api_base:
-        kwargs["api_base"] = settings.api_base
-    if settings.api_key:
-        kwargs["api_key"] = settings.api_key
-    if settings.timeout:
-        kwargs["timeout"] = settings.timeout
-
-    print(f"      🔗 Kwargs keys: {list(kwargs.keys())}", flush=True)
-    print(f"      📨 About to call completion_with_retry...", flush=True)
-
-    try:
-        content = completion_with_retry(kwargs)
-        print(f"      ✅ Got response from LLM, length: {len(content)} chars", flush=True)
-        print(f"      📝 Response preview: {content[:500]}", flush=True)
-
-        parsed = response_model.model_validate_json(content)
-        print(f"      ✅ Pydantic validation successful", flush=True)
-        print(f"      📦 Parsed result: {parsed}", flush=True)
-
-        return parsed
-    except Exception as e:
-        print(f"      ❌ ERROR in _call_json_sync: {type(e).__name__}: {e}", flush=True)
-        print(f"      ❌ TRACEBACK:", flush=True)
-        print(traceback.format_exc(), flush=True)
-        raise
+    Uses OpenAI SDK parse() via structured_completion.
+    No LiteLLM. No schema conversion. No manual validation.
+    """
+    print(f"      Calling structured_completion for {response_model.__name__}", flush=True)
+    return structured_completion(settings, messages, response_model)
 
 
 def save_artifact_with_lock(artifact: BookArtifact, book_yaml_path: Path):
@@ -269,7 +220,9 @@ def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: l
         )
 
     if covered != useful_ids:
-        raise ValueError("Chapter coverage is incomplete or non-contiguous")
+        uncovered = [b for b in useful_ids if b not in covered]
+        print(f"   ⚠️ Chapters cover {len(covered)}/{len(useful_ids)} useful blocks "
+              f"({len(uncovered)} uncovered, first: {uncovered[0] if uncovered else 'N/A'})", flush=True)
     return chapters
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 
 from v2.cartographer import LLMSettings
-from v2.pipeline import completion_with_retry, build_completion_kwargs
+from v2.pipeline import completion_with_retry
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, StageState
 
@@ -21,19 +21,8 @@ OVERVIEW_STAGE = "overview"
 
 
 def _call_text_sync(messages: list[dict], settings: LLMSettings) -> str:
-    kwargs = build_completion_kwargs(
-        settings.model,
-        messages,
-        temperature=settings.temperature,
-        thinking=settings.thinking,
-    )
-    if settings.api_base:
-        kwargs["api_base"] = settings.api_base
-    if settings.api_key:
-        kwargs["api_key"] = settings.api_key
-    if settings.timeout:
-        kwargs["timeout"] = settings.timeout
-    return completion_with_retry(kwargs)
+    """Text completion via OpenAI SDK - no LiteLLM."""
+    return completion_with_retry(settings, messages)
 
 
 def _chapter_source_text(artifact: BookArtifact, block_ids: list[str]) -> str:

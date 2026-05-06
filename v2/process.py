@@ -13,8 +13,6 @@ import signal
 import sys
 import time
 
-# Shut up LiteLLM debug/info spam before any imports
-os.environ["LITELLM_LOG"] = "ERROR"
 from pathlib import Path
 
 import yaml
@@ -159,7 +157,7 @@ def prepare_workspace(
         print("   [1/6] Ingest skipped (already complete)")
 
     cartography_stage = artifact.stages["cartography"]
-    if cartography_stage.status != "done" or not artifact.blocks:
+    if not artifact.blocks:
         print("   [2/6] Building block map...")
         print(f"   → Target {target_tokens} tokens, min {min_tokens}, max {max_tokens}")
         artifact = map_book_structure(
