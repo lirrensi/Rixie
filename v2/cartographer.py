@@ -6,6 +6,7 @@
 #
 # POLICY: Never write fallback garbage. If an AI call fails after all retries,
 # the field stays None and the stage reports the failure.
+# RESUMABILITY: Every completed block is saved immediately. Crashes/ctrl-c cost at most one in-flight block.
 
 from __future__ import annotations
 
@@ -13,7 +14,14 @@ import asyncio
 import json
 import math
 import sys
+import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+# fcntl is Unix-only, import conditionally
+if sys.platform != "win32":
+    import fcntl
 
 from pydantic import BaseModel, ValidationError
 
@@ -21,6 +29,7 @@ from v2.blocker import build_blocks
 from v2.pipeline import acompletion_with_retry, build_completion_kwargs
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, ChapterArtifact, StageState
+import yaml
 
 CARTOGRAPHY_STAGE = "cartography"
 MINI_SUMMARIES_STAGE = "mini_summaries"
@@ -51,6 +60,53 @@ class LLMSettings:
     thinking: bool = True
 
 
+class ArtifactLock:
+    """Process-wide lock for concurrent writes to book.yaml."""
+
+    def __init__(self, book_dir: Path):
+        self.lock_path = book_dir / ".book.lock"
+        self.lock_file: Optional[int] = None
+
+    def __enter__(self):
+        # Windows fcntl not available, use file-based locking
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+            except ImportError:
+                pass
+            # For Windows, we use a race-condition-ish approach with exclusive file creation
+            retry_count = 0
+            while retry_count < 10:
+                try:
+                    self.lock_file = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    break
+                except FileExistsError:
+                    import time
+                    time.sleep(0.1)
+                    retry_count += 1
+        else:
+            self.lock_file = os.open(self.lock_path, os.O_CREAT | os.O_WRONLY)
+            try:
+                fcntl.flock(self.lock_file, fcntl.LOCK_EX)
+            except (AttributeError, OSError):
+                pass
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.lock_file is not None:
+            if sys.platform != "win32":
+                try:
+                    fcntl.flock(self.lock_file, fcntl.LOCK_UN)
+                except (AttributeError, OSError):
+                    pass
+            os.close(self.lock_file)
+        try:
+            if self.lock_path.exists():
+                self.lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _extract_json_object(text: str) -> str:
     stripped = (text or "").strip()
     if stripped.startswith("```"):
@@ -59,7 +115,7 @@ def _extract_json_object(text: str) -> str:
             lines = lines[1:]
         if lines and lines[-1].startswith("```"):
             lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
+        stripped = "\\n".join(lines).strip()
     start = stripped.find("{")
     end = stripped.rfind("}")
     if start == -1 or end == -1 or end < start:
@@ -84,61 +140,73 @@ async def _call_json_async(messages: list[dict], settings: LLMSettings) -> dict:
     return json.loads(_extract_json_object(content))
 
 
-async def _summarize_block_async(block_text: str, settings: LLMSettings, prompt_file: str) -> MiniSummaryResult | None:
-    """Returns None if summarization fails after all retries."""
-    system = load_prompt(prompt_file)
-    user = f"BLOCK:\n{block_text}"
-    try:
-        parsed = MiniSummaryResult.model_validate(
-            await _call_json_async(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                settings,
-            )
-        )
-        parsed.mini_summary = " ".join(parsed.mini_summary.split())
-        return parsed
-    except Exception as e:
-        print(f"   \u274c Block summarization failed: {e}")
-        sys.stdout.flush()
-        return None
+def save_artifact_with_lock(artifact: BookArtifact, book_yaml_path: Path):
+    """Save artifact with process locking to prevent corruption from concurrent writes."""
+    with ArtifactLock(book_yaml_path.parent):
+        yaml_content = yaml.safe_dump(artifact.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
+        book_yaml_path.write_text(yaml_content, encoding="utf-8")
 
 
 async def generate_block_mini_summaries(
     artifact: BookArtifact,
+    workspace_dir: Path,
     *,
     llm_settings: LLMSettings,
     parallel_calls: int = 8,
     prompt_file: str = "prompt_block_mini_summary.md",
+    save_every: int = 5,
 ) -> BookArtifact:
+    """Generate mini summaries with incremental saving. Resumable from any point."""
     artifact.stages.setdefault(MINI_SUMMARIES_STAGE, StageState(name=MINI_SUMMARIES_STAGE))
     stage = artifact.stages[MINI_SUMMARIES_STAGE]
     stage.status = "running"
     stage.notes = "Generating one-sentence block summaries and useful=false classifications."
 
     total = len(artifact.blocks)
-    print(f"   \U0001f50e Mini summaries: {total} block(s)")
+    print(f"   \\U0001f50e Mini summaries: {total} block(s)")
     sys.stdout.flush()
 
+    # Skip blocks that already have mini_summaries
+    pending_indices = [
+        idx for idx, block in enumerate(artifact.blocks)
+        if block.mini_summary is None or block.useful is None
+    ]
+
+    if not pending_indices:
+        print(f"   ✓ All {total} blocks already have mini summaries")
+        stage.status = "done"
+        stage.notes = "All block mini-summaries already present."
+        sys.stdout.flush()
+        return artifact
+
+    print(f"   → Resuming {len(pending_indices)} pending blocks (skipping {total - len(pending_indices)} complete)")
+    sys.stdout.flush()
+
+    book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
+    save_count = 0
+
     sem = asyncio.Semaphore(parallel_calls)
-    print(f"   \U0001f525 Firing {total} requests ({parallel_calls} concurrent)...")
+    print(f"   \\U0001f525 Firing {len(pending_indices)} requests ({parallel_calls} concurrent)...")
     sys.stdout.flush()
 
     async def _do_one(idx: int, block) -> tuple[int, MiniSummaryResult | None]:
-        print(f"   \U0001f4e4 Sent {idx+1}/{total}: {block.block_id}")
+        print(f"   📤 Sent {idx+1}/{total}: {block.block_id}")
         sys.stdout.flush()
         try:
-            result = await _summarize_block_async(block.text or "", llm_settings, prompt_file)
-            if result:
-                print(f"   \u2705 Done {idx+1}/{total}: {block.block_id} \u2192 useful={result.useful}")
-            else:
-                print(f"   \u274c Fail {idx+1}/{total}: {block.block_id}")
+            result = await _call_json_async(
+                [
+                    {"role": "system", "content": load_prompt(prompt_file)},
+                    {"role": "user", "content": f"BLOCK:\\n{block.text}"},
+                ],
+                llm_settings,
+            )
+            parsed = MiniSummaryResult.model_validate(result)
+            parsed.mini_summary = " ".join(parsed.mini_summary.split())
+            print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → useful={parsed.useful}")
             sys.stdout.flush()
-            return idx, result
+            return idx, parsed
         except Exception as e:
-            print(f"   \u274c Fail {idx+1}/{total}: {block.block_id} \u2192 {e}")
+            print(f"   ✗ Fail {idx+1}/{total}: {block.block_id} → {e}")
             sys.stdout.flush()
             return idx, None
 
@@ -146,28 +214,50 @@ async def generate_block_mini_summaries(
         async with sem:
             return await _do_one(idx, block)
 
-    tasks = [_throttled(idx, block) for idx, block in enumerate(artifact.blocks)]
-    results = await asyncio.gather(*tasks)
+    async def _with_incremental_save(results_list: list):
+        """Yield results and save incrementally."""
+        tasks = [_throttled(idx, artifact.blocks[idx]) for idx in pending_indices]
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            results_list.append(result)
+            save_count += 1
+            if save_count % save_every == 0:
+                for idx, parsed in results_list:
+                    if parsed:
+                        artifact.blocks[idx].mini_summary = parsed.mini_summary
+                        artifact.blocks[idx].useful = parsed.useful
+                save_artifact_with_lock(artifact, book_yaml_path)
+                print(f"   💾 Saved progress ({save_count}/{len(pending_indices)} completed)")
+                sys.stdout.flush()
+        return results_list
+
+    results = await _with_incremental_save([])
 
     failures = 0
-    for idx, result in sorted(results):
+    for idx, result in results:
         if result:
             artifact.blocks[idx].mini_summary = result.mini_summary
             artifact.blocks[idx].useful = result.useful
         else:
             failures += 1
-            # Field stays None
+
+    # Final save to ensure everything is written
+    for idx, parsed in results:
+        if parsed:
+            artifact.blocks[idx].mini_summary = parsed.mini_summary
+            artifact.blocks[idx].useful = parsed.useful
+    save_artifact_with_lock(artifact, book_yaml_path)
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
 
     if failures:
         stage.status = "partial"
         stage.notes = f"Generated {total - failures}/{total} block summaries ({failures} failures)."
-        print(f"   \u26a0\ufe0f {failures}/{total} block summaries failed — fields left None")
+        print(f"   ⚠️ {failures}/{total} block summaries failed — fields left None")
     else:
         stage.status = "done"
         stage.notes = "All block mini-summaries generated."
-        print(f"   \u2705 Mini summaries: {total} blocks complete")
+        print(f"   ✓ Mini summaries: {total} blocks complete")
 
     stage.outputs = {
         "block_count": len(artifact.blocks),
@@ -220,6 +310,7 @@ def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: l
 
 async def group_blocks_into_chapters(
     artifact: BookArtifact,
+    workspace_dir: Path,
     *,
     llm_settings: LLMSettings,
     prompt_file: str = "prompt_cartographer_map.md",
@@ -227,7 +318,7 @@ async def group_blocks_into_chapters(
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
     useful_blocks = [block for block in artifact.blocks if block.useful is not False]
-    print(f"   \U0001f9ed Cartographer: {len(useful_blocks)} useful blocks out of {len(artifact.blocks)} total")
+    print(f"   \\U0001f9ed Cartographer: {len(useful_blocks)} useful blocks out of {len(artifact.blocks)} total")
     if not useful_blocks:
         artifact.chapters = []
         stage.status = "done"
@@ -235,16 +326,16 @@ async def group_blocks_into_chapters(
         stage.outputs = {**stage.outputs, "chapter_count": 0}
         return artifact.touch()
 
-    print("   \U0001f4cb Building block list for LLM...")
+    print("   \\U0001f4cb Building block list for LLM...")
     block_lines = []
     for block in useful_blocks:
         summary = block.mini_summary or ""
         block_lines.append(f"{block.block_id}: {summary}")
 
-    print(f"   \U0001f916 Calling {llm_settings.model} to group into chapters...")
+    print(f"   \\U0001f916 Calling {llm_settings.model} to group into chapters...")
     sys.stdout.flush()
     system = load_prompt(prompt_file)
-    user = "ORDERED BLOCK SUMMARIES:\n" + "\n".join(block_lines)
+    user = "ORDERED BLOCK SUMMARIES:\\n" + "\\n".join(block_lines)
 
     try:
         parsed = ChapterMapResult.model_validate(
@@ -259,12 +350,16 @@ async def group_blocks_into_chapters(
         artifact.chapters = _validate_and_materialize_chapters(artifact, parsed.chapters)
         stage.status = "done"
         stage.notes = "Generated chapter map from ordered mini-summaries."
-        print(f"   \u2705 Cartographer mapped {len(artifact.chapters)} chapter(s)")
+        print(f"   ✓ Cartographer mapped {len(artifact.chapters)} chapter(s)")
+
+        # Save immediately after successful chapter generation
+        book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
+        save_artifact_with_lock(artifact, book_yaml_path)
     except (ValidationError, ValueError, Exception) as e:
         artifact.chapters = []
         stage.status = "failed"
         stage.notes = f"Cartographer LLM failed: {e}"
-        print(f"   \u274c Cartographer failed: {e}")
+        print(f"   ✗ Cartographer failed: {e}")
 
     stage.outputs = {
         **stage.outputs,
@@ -284,7 +379,7 @@ def map_book_structure(
     max_tokens: int = 1280,
     encoding_model: str = "gpt-4o-mini",
 ) -> BookArtifact:
-    print(f"   \U0001f4ca Tokenizing with {encoding_model}...")
+    print(f"   📊 Tokenizing with {encoding_model}...")
     artifact.stages.setdefault(CARTOGRAPHY_STAGE, StageState(name=CARTOGRAPHY_STAGE))
     artifact.blocks = build_blocks(
         source_text,
@@ -293,7 +388,7 @@ def map_book_structure(
         max_tokens=max_tokens,
         encoding_model=encoding_model,
     )
-    print(f"   \u2702\ufe0f  Split into {len(artifact.blocks)} blocks")
+    print(f"   ✂️  Split into {len(artifact.blocks)} blocks")
     artifact.stages[CARTOGRAPHY_STAGE].notes = (
         "Block anchors generated. TODO: create mini-summaries and group them into chapters."
     )

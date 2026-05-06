@@ -181,15 +181,16 @@ def prepare_workspace(
 
     if mini_summary_settings and artifact.blocks and artifact.stages["mini_summaries"].status != "done":
         print("   [3/6] Generating block mini summaries...")
-        print(f"   \u2192 Using {mini_summary_settings.model} with {parallel_calls} parallel calls")
+        print(f"   \\u2192 Using {mini_summary_settings.model} with {parallel_calls} parallel calls")
         artifact = asyncio.run(generate_block_mini_summaries(
             artifact,
+            workspace_dir,
             llm_settings=mini_summary_settings,
             parallel_calls=parallel_calls,
             prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
         ))
         useful = sum(1 for b in artifact.blocks if b.useful)
-        print(f"   \u2705 Mini summaries done: {useful}/{len(artifact.blocks)} useful")
+        print(f"   \\u2705 Mini summaries done: {useful}/{len(artifact.blocks)} useful")
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["mini_summaries"].status == "done":
         print("   [3/6] Mini summaries skipped (already complete)")
@@ -198,6 +199,7 @@ def prepare_workspace(
         print("   [4/6] Grouping blocks into chapters...")
         artifact = asyncio.run(group_blocks_into_chapters(
             artifact,
+            workspace_dir,
             llm_settings=cartographer_settings,
             prompt_file=str(cartography_profile.get("prompt_file", "prompt_cartographer_map.md")),
         ))
