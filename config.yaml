@@ -80,8 +80,8 @@ v2:
 
   blocking:
     encoding_model: "gpt-4o-mini"  # Tokenizer model for synthetic page splitting
-    target_tokens: 1024             # Target synthetic-page size
-    min_tokens: 768                 # Prefer not to split below this unless needed
-    max_tokens: 1280                # Hard-ish cap before forcing a split
+    target_tokens: 4096             # Target synthetic-page size
+    min_tokens: 3884                 # Prefer not to split below this unless needed
+    max_tokens: 4396                # Hard-ish cap before forcing a split
   execution:
-    parallel_calls: 8               # Parallel lightweight LLM calls (set 1 for chunky/local runs)
+    parallel_calls: 1               # Parallel lightweight LLM calls (set 1 for chunky/local runs)

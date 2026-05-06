@@ -576,11 +576,6 @@
         font-style: italic;
         line-height: 1.6;
       }
-      .book-hero .abstract {
-        max-width: var(--content-width, 680px);
-        margin: 0 auto 2rem;
-        line-height: var(--body-line-height, 1.75);
-      }
       .book-hero-meta {
         display: flex;
         gap: 1.5rem;
@@ -727,12 +722,30 @@
         margin: 0 auto;
       }
       .chapter-body p {
-        margin-bottom: 1.5rem;
+        margin-bottom: 2rem;
         line-height: var(--body-line-height, 1.75);
         color: var(--text);
       }
+      .chapter-body p:last-child {
+        margin-bottom: 0;
+      }
       .chapter-body p.dim {
         color: var(--text-dim);
+      }
+      .chapter-content {
+        margin-bottom: 2.5rem;
+      }
+      .chapter-detail {
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--border-subtle);
+      }
+      .detail-body {
+        margin-top: 1rem;
+        line-height: var(--body-line-height, 1.75);
+      }
+      .detail-body p {
+        margin-bottom: 1.5rem;
       }
 
       /* ── Section labels ── */
@@ -1997,13 +2010,18 @@
       <div class="book-hero-label">Interactive Edition</div>
       <h1 id="heroTitle"></h1>
       <div class="book-hero-author" id="heroAuthor"></div>
-      <div class="abstract" id="heroAbstract"></div>
       <div class="book-hero-meta">
         <span id="chapterCount">📖</span>
         <span id="readingTime">⏱</span>
       </div>
       <div class="scroll-hint">↓ scroll to begin</div>
     </section>
+
+    <!-- ════════════════════════════════════════════════════════════
+     ABSTRACT
+     Full-width, same styling as chapter body text.
+     ════════════════════════════════════════════════════════════ -->
+    <section class="chapter-body" id="abstractSection" style="border-top: none;"></section>
 
     <!-- ════════════════════════════════════════════════════════════
      TABLE OF CONTENTS
@@ -2056,7 +2074,9 @@
         document.getElementById('heroTitle').textContent = title
         document.getElementById('heroAuthor').textContent = 'by ' + authorStr
         if (abstractHtml)
-          document.getElementById('heroAbstract').innerHTML = abstractHtml
+          document.getElementById('abstractSection').innerHTML =
+            '<div class="section-label">Abstract</div>' +
+            '<div class="chapter-content">' + abstractHtml + '</div>'
         document.getElementById('chapterCount').textContent =
           '\uD83D\uDCD6 ' + chapters.length + ' chapters'
         document.getElementById('readingTime').textContent =
@@ -2138,7 +2158,7 @@
           body.className = 'chapter-body'
           var contentDiv = document.createElement('div')
           contentDiv.className = 'chapter-content'
-          contentDiv.innerHTML = marked.parse(ch.short_summary || '')
+          contentDiv.innerHTML = marked.parse(ch.short_summary || '', {breaks: true})
           body.appendChild(contentDiv)
           if (ch.detailed_summary) {
             var details = document.createElement('details')
@@ -2148,7 +2168,7 @@
             details.appendChild(summary)
             var detailBody = document.createElement('div')
             detailBody.className = 'detail-body'
-            detailBody.innerHTML = marked.parse(ch.detailed_summary)
+            detailBody.innerHTML = marked.parse(ch.detailed_summary, {breaks: true})
             details.appendChild(detailBody)
             body.appendChild(details)
           }

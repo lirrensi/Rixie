@@ -9,11 +9,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 
 from v2.cartographer import LLMSettings
-from v2.pipeline import acompletion_with_retry, build_completion_kwargs
+from v2.pipeline import completion_with_retry, build_completion_kwargs
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, StageState
 
@@ -21,7 +20,7 @@ CHAPTER_SUMMARIES_STAGE = "chapter_summaries"
 OVERVIEW_STAGE = "overview"
 
 
-async def _call_text_async(messages: list[dict], settings: LLMSettings) -> str:
+def _call_text_sync(messages: list[dict], settings: LLMSettings) -> str:
     kwargs = build_completion_kwargs(
         settings.model,
         messages,
@@ -34,7 +33,7 @@ async def _call_text_async(messages: list[dict], settings: LLMSettings) -> str:
         kwargs["api_key"] = settings.api_key
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
-    return await acompletion_with_retry(kwargs)
+    return completion_with_retry(kwargs)
 
 
 def _chapter_source_text(artifact: BookArtifact, block_ids: list[str]) -> str:
@@ -47,12 +46,12 @@ def _chapter_source_text(artifact: BookArtifact, block_ids: list[str]) -> str:
     return "\n\n".join(parts).strip()
 
 
-async def _summarize_short_async(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str | None:
+def _summarize_short_sync(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str | None:
     """Returns None if summarization fails after all retries."""
     system = load_prompt(prompt_file)
     user = f"CHAPTER TITLE: {chapter_title}\n\nSOURCE TEXT:\n{source_text}"
     try:
-        return await _call_text_async(
+        return _call_text_sync(
             [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -60,17 +59,16 @@ async def _summarize_short_async(chapter_title: str, source_text: str, settings:
             settings,
         )
     except Exception as e:
-        print(f"   \u274c Short summary failed for '{chapter_title}': {e}")
-        sys.stdout.flush()
+        print(f"   ❌ Short summary failed for '{chapter_title}': {e}", flush=True)
         return None
 
 
-async def _summarize_detailed_async(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str | None:
+def _summarize_detailed_sync(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str | None:
     """Returns None if summarization fails after all retries."""
     system = load_prompt(prompt_file)
     user = f"CHAPTER TITLE: {chapter_title}\n\nSOURCE TEXT:\n{source_text}"
     try:
-        return await _call_text_async(
+        return _call_text_sync(
             [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -78,17 +76,16 @@ async def _summarize_detailed_async(chapter_title: str, source_text: str, settin
             settings,
         )
     except Exception as e:
-        print(f"   \u274c Detailed summary failed for '{chapter_title}': {e}")
-        sys.stdout.flush()
+        print(f"   ❌ Detailed summary failed for '{chapter_title}': {e}", flush=True)
         return None
 
 
-async def summarize_chapters(
+def summarize_chapters(
     artifact: BookArtifact,
     *,
     short_settings: LLMSettings,
     detailed_settings: LLMSettings,
-    parallel_calls: int = 8,
+    parallel_calls: int = 1,  # IGNORED - always sequential
     short_prompt_file: str = "prompt_chapter_short.md",
     detailed_prompt_file: str = "prompt_chapter_detailed.md",
 ) -> BookArtifact:
@@ -98,64 +95,37 @@ async def summarize_chapters(
     stage.notes = "Generating separate short and detailed summaries for each mapped chapter."
 
     chapter_count = len(artifact.chapters)
-    print(f"   \u270d\ufe0f Chapter summaries: {chapter_count} chapter(s) with {parallel_calls} concurrent")
-    sys.stdout.flush()
+    print(f"   ✍️ Chapter summaries: {chapter_count} chapter(s) - SEQUENTIAL", flush=True)
 
     chapter_payloads = [
         (idx, chapter.title, _chapter_source_text(artifact, chapter.blocks))
         for idx, chapter in enumerate(artifact.chapters)
     ]
-
-    sem = asyncio.Semaphore(parallel_calls)
     total = len(chapter_payloads)
 
     # ---- SHORT SUMMARIES ----
-    async def _do_short(idx: int, title: str, text: str) -> tuple[int, str | None]:
-        print(f"   \U0001f4e4 Short sent: {title}")
-        sys.stdout.flush()
-        result = await _summarize_short_async(title, text, short_settings, short_prompt_file)
-        if result:
-            print(f"   \u2705 Short done: {title}")
-        else:
-            print(f"   \u274c Short FAILED: {title}")
-        sys.stdout.flush()
-        return idx, result
-
-    async def _throttled_short(idx: int, title: str, text: str) -> tuple[int, str | None]:
-        async with sem:
-            return await _do_short(idx, title, text)
-
-    print(f"   \U0001f525 Firing {total} short summaries ({parallel_calls} concurrent)...")
-    sys.stdout.flush()
-    short_results = await asyncio.gather(*[_throttled_short(idx, t, x) for idx, t, x in chapter_payloads])
-    for idx, result in short_results:
+    short_failed = []
+    for idx, title, text in chapter_payloads:
+        print(f"   📤 Short sent: {title}", flush=True)
+        result = _summarize_short_sync(title, text, short_settings, short_prompt_file)
         artifact.chapters[idx].short_summary = result
-
-    short_failed = [artifact.chapters[idx].title for idx, r in short_results if r is None]
+        if result:
+            print(f"   ✅ Short done: {title}", flush=True)
+        else:
+            print(f"   ❌ Short FAILED: {title}", flush=True)
+            short_failed.append(title)
 
     # ---- DETAILED SUMMARIES ----
-    async def _do_detail(idx: int, title: str, text: str) -> tuple[int, str | None]:
-        print(f"   \U0001f4e4 Detail sent: {title}")
-        sys.stdout.flush()
-        result = await _summarize_detailed_async(title, text, detailed_settings, detailed_prompt_file)
-        if result:
-            print(f"   \u2705 Detail done: {title}")
-        else:
-            print(f"   \u274c Detail FAILED: {title}")
-        sys.stdout.flush()
-        return idx, result
-
-    async def _throttled_detail(idx: int, title: str, text: str) -> tuple[int, str | None]:
-        async with sem:
-            return await _do_detail(idx, title, text)
-
-    print(f"   \U0001f525 Firing {total} detailed summaries ({parallel_calls} concurrent)...")
-    sys.stdout.flush()
-    detail_results = await asyncio.gather(*[_throttled_detail(idx, t, x) for idx, t, x in chapter_payloads])
-    for idx, result in detail_results:
+    detail_failed = []
+    for idx, title, text in chapter_payloads:
+        print(f"   📤 Detail sent: {title}", flush=True)
+        result = _summarize_detailed_sync(title, text, detailed_settings, detailed_prompt_file)
         artifact.chapters[idx].detailed_summary = result
-
-    detail_failed = [artifact.chapters[idx].title for idx, r in detail_results if r is None]
+        if result:
+            print(f"   ✅ Detail done: {title}", flush=True)
+        else:
+            print(f"   ❌ Detail FAILED: {title}", flush=True)
+            detail_failed.append(title)
 
     # ---- REPORT ----
     all_failed = set(short_failed + detail_failed)
@@ -163,26 +133,25 @@ async def summarize_chapters(
         stage.status = "partial"
         failures = "; ".join(sorted(all_failed))
         stage.notes = f"Summaries generated with {len(all_failed)} failure(s): {failures}"
-        print(f"   \u26a0\ufe0f Chapter summaries: {chapter_count - len(short_failed)}/{chapter_count} short, "
-              f"{chapter_count - len(detail_failed)}/{chapter_count} detailed OK. Failed: {failures}")
+        print(f"   ⚠️ Chapter summaries: {total - len(short_failed)}/{total} short, "
+              f"{total - len(detail_failed)}/{total} detailed OK. Failed: {failures}", flush=True)
     else:
         stage.status = "done"
         stage.notes = "All chapter summaries generated successfully."
-        print(f"   \u2705 Chapter summaries complete: {chapter_count} chapters")
+        print(f"   ✅ Chapter summaries complete: {total} chapters", flush=True)
 
     stage.outputs = {
         "chapter_count": chapter_count,
-        "parallel_calls": parallel_calls,
+        "parallel_calls": 1,
         "short_model": short_settings.model,
         "detailed_model": detailed_settings.model,
         "short_failures": short_failed,
         "detail_failures": detail_failed,
     }
-    sys.stdout.flush()
     return artifact.touch()
 
 
-async def synthesize_overview(
+def synthesize_overview(
     artifact: BookArtifact,
     *,
     ultra_dense_settings: LLMSettings,
@@ -198,24 +167,21 @@ async def synthesize_overview(
     if not available:
         stage.status = "failed"
         stage.notes = "No chapter short summaries available; cannot synthesize overview."
-        print("   \u26a0\ufe0f No short summaries available — skipping overview synthesis.")
-        sys.stdout.flush()
+        print("   ⚠️ No short summaries available — skipping overview synthesis.", flush=True)
         return artifact.touch()
 
-    print(f"   \U0001f9ea Abstract: compressing {len(available)} chapter short summary(s)")
-    sys.stdout.flush()
+    print(f"   🧪 Abstract: compressing {len(available)} chapter short summary(s)", flush=True)
 
-    print("   \U0001f4dd Merging chapter summaries...")
+    print("   📝 Merging chapter summaries...", flush=True)
     chapter_summaries = "\n\n".join(
         f"## {chapter.title}\n{chapter.short_summary or ''}" for chapter in artifact.chapters
     ).strip()
-    print(f"   \U0001f4cb Combined text: {len(chapter_summaries):,} chars")
+    print(f"   📋 Combined text: {len(chapter_summaries):,} chars", flush=True)
 
-    print(f"   \U0001f916 Calling {ultra_dense_settings.model} for abstract...")
-    sys.stdout.flush()
+    print(f"   🤖 Calling {ultra_dense_settings.model} for abstract...", flush=True)
 
     try:
-        result = await _call_text_async(
+        result = _call_text_sync(
             [
                 {
                     "role": "system",
@@ -229,19 +195,18 @@ async def synthesize_overview(
             artifact.overview.ultra_dense_summary = result
             stage.status = "done"
             stage.notes = "Abstract generated successfully."
-            print("   \u2705 Abstract complete")
+            print("   ✅ Abstract complete", flush=True)
         else:
             stage.status = "failed"
             stage.notes = "Abstract call returned empty response."
-            print("   \u274c Abstract returned empty — overview not written.")
+            print("   ❌ Abstract returned empty — overview not written.", flush=True)
     except Exception as e:
         stage.status = "failed"
         stage.notes = f"Abstract call failed: {e}"
-        print(f"   \u274c Abstract failed: {e}")
+        print(f"   ❌ Abstract failed: {e}", flush=True)
 
     stage.outputs = {
         "chapter_count": len(artifact.chapters),
         "ultra_dense_model": ultra_dense_settings.model,
     }
-    sys.stdout.flush()
     return artifact.touch()

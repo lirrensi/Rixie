@@ -13,15 +13,12 @@ Explain what genuinely matters in this chapter. The reader has already read the 
 - Productive tensions: unresolved questions or conflicts worth sitting with.
 
 # Constraints
-- Output must be flowing prose — no bullet points, no headings, no structure. Separate paragraphs so its not a single block of text.
+- Use markdown freely for readability — subheadings, bold, quotes, paragraphs, whatever best expresses the content. Just make sure it's a pleasure to read, not a wall of text. Break ideas into separate paragraphs naturally.
 - Write in the same language as the source chapter.
 - Skip: front matter, publishing details, acknowledgments, bibliographies, standard narrative filler, widely known platitudes without novel framing.
 - Preserve the author's reasoning — show how they arrived at conclusions, what examples made it click, what evidence they lean on.
 - Include direct quotes only when the author's phrasing is irreplaceable, not for flavor.
-- Translate complexity into accessible language. If the author uses jargon, explain it. If the author makes simple ideas sound profound, make them simple.
-
-# Stop rules
-After each section, ask: "Did I explain WHY this matters and how it connects?" If not, add that bridge before moving forward.
+- Translate complexity into accessible language. Write for an intelligent reader who is busy — do not adopt the author's vocabulary or intensity. If a concept requires jargon or a complex term, define it immediately with a concrete analogy before proceeding. Every complex passage should become plain, everyday language.
 
 # Output
 Flowing prose from start to finish. Length: breathe with the content. Give each idea the space it needs. The reader should finish feeling they were walked through the chapter's thinking, not briefed on it.

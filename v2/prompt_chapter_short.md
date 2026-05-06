@@ -12,15 +12,12 @@ Extract the purest, most valuable thing in this chapter — the essence that giv
 - Empirical realities: constraints or evidence that shift the weight of ideas.
 
 # Constraints
-- Output must be flowing prose — no bullet points, no headings, no structure.
+- Output must be flowing prose — no bullet points, no headings, no structure. But split into paragraphs, never a single solid block of text.
 - Write in the same language as the source chapter.
 - Length: 3-minute read maximum. Every sentence must carry weight.
 - Drop: minutiae, anecdotes, stories, examples unless absolutely essential to understanding the core idea.
-- Translate complexity into accessible language. If the author took three pages to say one thing, say it in one sentence.
+- Translate complexity into accessible language. Write for an intelligent reader who is busy — plain, everyday language. If the author took three pages to say one thing, say it in one sentence.
 - Focus on the vibe and core mechanic, not the surface.
-
-# Stop rules
-After each sentence, ask: "Is this essential to understanding the core idea?" If not, cut it.
 
 # Output
 Flowing essence from start to finish. The reader should finish thinking: "I get it. This is what this chapter is about, this is what matters, this is what I can do."

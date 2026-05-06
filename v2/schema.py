@@ -31,7 +31,7 @@ class DocumentMetadata(BaseModel):
 
 class StageState(BaseModel):
     name: str
-    status: Literal["pending", "ready", "running", "done", "failed"] = "pending"
+    status: Literal["pending", "ready", "running", "partial", "done", "failed"] = "pending"
     version: str = "0.1"
     updated_at: datetime = Field(default_factory=utc_now)
     notes: str | None = None
