@@ -5,7 +5,7 @@ Task:
 - Never reorder blocks.
 - Never leave gaps.
 - Every useful block must appear exactly once.
-- Prefer concise, descriptive titles.
+- Prefer concise, descriptive chapter titles that reflect the content progression.
 
 Rules:
 - Return strict JSON only.
