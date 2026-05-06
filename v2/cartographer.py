@@ -3,6 +3,9 @@
 # OWNS: Cartography-stage placeholder logic and stage naming for V2.
 # EXPORTS: CARTOGRAPHY_STAGE, map_book_structure.
 # DOCS: README.md, v2/schema.py, v2/pipeline.py
+#
+# POLICY: Never write fallback garbage. If an AI call fails after all retries,
+# the field stays None and the stage reports the failure.
 
 from __future__ import annotations
 
@@ -12,11 +15,10 @@ import math
 import sys
 from dataclasses import dataclass
 
-from litellm import acompletion
 from pydantic import BaseModel, ValidationError
 
 from v2.blocker import build_blocks
-from v2.pipeline import build_completion_kwargs
+from v2.pipeline import acompletion_with_retry, build_completion_kwargs
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, ChapterArtifact, StageState
 
@@ -78,31 +80,12 @@ async def _call_json_async(messages: list[dict], settings: LLMSettings) -> dict:
         kwargs["api_key"] = settings.api_key
     if settings.timeout:
         kwargs["timeout"] = settings.timeout
-    try:
-        response = await acompletion(**kwargs)
-    except Exception:
-        kwargs.pop("reasoning_effort", None)
-        response = await acompletion(**kwargs)
-    content = response.choices[0].message.content or ""
+    content = await acompletion_with_retry(kwargs)
     return json.loads(_extract_json_object(content))
 
 
-def _fallback_block_summary(text: str) -> MiniSummaryResult:
-    clean = " ".join((text or "").split())
-    short = clean[:220].strip()
-    if len(clean) > 220:
-        short += "\u2026"
-    useful = not any(
-        marker in clean.lower()
-        for marker in ["table of contents", "copyright", "references", "bibliography", "index"]
-    )
-    return MiniSummaryResult(
-        mini_summary=short or "Low-information block with no reliable summary.",
-        useful=useful,
-    )
-
-
-async def _summarize_block_async(block_text: str, settings: LLMSettings, prompt_file: str) -> MiniSummaryResult:
+async def _summarize_block_async(block_text: str, settings: LLMSettings, prompt_file: str) -> MiniSummaryResult | None:
+    """Returns None if summarization fails after all retries."""
     system = load_prompt(prompt_file)
     user = f"BLOCK:\n{block_text}"
     try:
@@ -117,8 +100,10 @@ async def _summarize_block_async(block_text: str, settings: LLMSettings, prompt_
         )
         parsed.mini_summary = " ".join(parsed.mini_summary.split())
         return parsed
-    except Exception:
-        return _fallback_block_summary(block_text)
+    except Exception as e:
+        print(f"   \u274c Block summarization failed: {e}")
+        sys.stdout.flush()
+        return None
 
 
 async def generate_block_mini_summaries(
@@ -141,60 +126,59 @@ async def generate_block_mini_summaries(
     print(f"   \U0001f525 Firing {total} requests ({parallel_calls} concurrent)...")
     sys.stdout.flush()
 
-    async def _do_one(idx: int, block) -> tuple[int, MiniSummaryResult]:
+    async def _do_one(idx: int, block) -> tuple[int, MiniSummaryResult | None]:
         print(f"   \U0001f4e4 Sent {idx+1}/{total}: {block.block_id}")
         sys.stdout.flush()
         try:
             result = await _summarize_block_async(block.text or "", llm_settings, prompt_file)
-            print(f"   \u2705 Done {idx+1}/{total}: {block.block_id} \u2192 useful={result.useful}")
+            if result:
+                print(f"   \u2705 Done {idx+1}/{total}: {block.block_id} \u2192 useful={result.useful}")
+            else:
+                print(f"   \u274c Fail {idx+1}/{total}: {block.block_id}")
             sys.stdout.flush()
             return idx, result
         except Exception as e:
-            fallback = _fallback_block_summary(block.text or "")
             print(f"   \u274c Fail {idx+1}/{total}: {block.block_id} \u2192 {e}")
             sys.stdout.flush()
-            return idx, fallback
+            return idx, None
 
-    # Gate concurrency with semaphore
-    async def _throttled(idx: int, block) -> tuple[int, MiniSummaryResult]:
+    async def _throttled(idx: int, block) -> tuple[int, MiniSummaryResult | None]:
         async with sem:
             return await _do_one(idx, block)
 
     tasks = [_throttled(idx, block) for idx, block in enumerate(artifact.blocks)]
     results = await asyncio.gather(*tasks)
 
+    failures = 0
     for idx, result in sorted(results):
-        artifact.blocks[idx].mini_summary = result.mini_summary
-        artifact.blocks[idx].useful = result.useful
+        if result:
+            artifact.blocks[idx].mini_summary = result.mini_summary
+            artifact.blocks[idx].useful = result.useful
+        else:
+            failures += 1
+            # Field stays None
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
-    stage.status = "done"
+
+    if failures:
+        stage.status = "partial"
+        stage.notes = f"Generated {total - failures}/{total} block summaries ({failures} failures)."
+        print(f"   \u26a0\ufe0f {failures}/{total} block summaries failed — fields left None")
+    else:
+        stage.status = "done"
+        stage.notes = "All block mini-summaries generated."
+        print(f"   \u2705 Mini summaries: {total} blocks complete")
+
     stage.outputs = {
         "block_count": len(artifact.blocks),
         "useful_blocks": useful_blocks,
         "skipped_blocks": len(artifact.blocks) - useful_blocks,
+        "failed_blocks": failures,
         "parallel_calls": parallel_calls,
         "model": llm_settings.model,
     }
+    sys.stdout.flush()
     return artifact.touch()
-
-
-def _group_fallback(artifact: BookArtifact) -> list[ChapterRange]:
-    useful_blocks = [block for block in artifact.blocks if block.useful is not False]
-    if not useful_blocks:
-        return []
-    group_size = max(3, math.ceil(len(useful_blocks) / 8))
-    chapters: list[ChapterRange] = []
-    for i in range(0, len(useful_blocks), group_size):
-        chunk = useful_blocks[i : i + group_size]
-        chapters.append(
-            ChapterRange(
-                title=f"Section {len(chapters) + 1}",
-                block_start=chunk[0].block_id,
-                block_end=chunk[-1].block_id,
-            )
-        )
-    return chapters
 
 
 def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: list[ChapterRange]) -> list[ChapterArtifact]:
@@ -273,20 +257,22 @@ async def group_blocks_into_chapters(
             )
         )
         artifact.chapters = _validate_and_materialize_chapters(artifact, parsed.chapters)
+        stage.status = "done"
         stage.notes = "Generated chapter map from ordered mini-summaries."
-    except (ValidationError, ValueError, Exception):
-        fallback = _group_fallback(artifact)
-        artifact.chapters = _validate_and_materialize_chapters(artifact, fallback)
-        stage.notes = "Cartographer LLM output failed validation; used deterministic fallback grouping."
+        print(f"   \u2705 Cartographer mapped {len(artifact.chapters)} chapter(s)")
+    except (ValidationError, ValueError, Exception) as e:
+        artifact.chapters = []
+        stage.status = "failed"
+        stage.notes = f"Cartographer LLM failed: {e}"
+        print(f"   \u274c Cartographer failed: {e}")
 
-    stage.status = "done"
-    print(f"   \u2705 Cartographer mapped {len(artifact.chapters)} chapter(s)")
     stage.outputs = {
         **stage.outputs,
         "chapter_count": len(artifact.chapters),
         "useful_blocks": len(useful_blocks),
         "model": llm_settings.model,
     }
+    sys.stdout.flush()
     return artifact.touch()
 
 
