@@ -62,7 +62,7 @@ v2:
 
     chapter_short:
       prompt_file: "prompt_chapter_short.md"
-      temperature: 0.2
+      temperature: 0.25
       thinking: true
       # model: null
       # base_url: null

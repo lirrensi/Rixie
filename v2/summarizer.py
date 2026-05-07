@@ -4,8 +4,9 @@
 # EXPORTS: summarize_chapters, synthesize_overview.
 # DOCS: v2/process.py, v2/schema.py
 #
-# POLICY: Never write fallback garbage. If an AI call fails after all retries,
-# the field stays None and the stage reports the failure.
+# POLICY: Every LLM call must succeed. If retries are exhausted and a call
+# still fails, the exception propagates — the entire book is skipped.
+# No partial output is ever produced.
 
 from __future__ import annotations
 
@@ -35,38 +36,30 @@ def _chapter_source_text(artifact: BookArtifact, block_ids: list[str]) -> str:
     return "\n\n".join(parts).strip()
 
 
-def _summarize_short_sync(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str | None:
-    """Returns None if summarization fails after all retries."""
+def _summarize_short_sync(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str:
+    """Generate short chapter summary. Raises on failure (no fallback)."""
     system = load_prompt(prompt_file)
     user = f"CHAPTER TITLE: {chapter_title}\n\nSOURCE TEXT:\n{source_text}"
-    try:
-        return _call_text_sync(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            settings,
-        )
-    except Exception as e:
-        print(f"   ❌ Short summary failed for '{chapter_title}': {e}", flush=True)
-        return None
+    return _call_text_sync(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        settings,
+    )
 
 
-def _summarize_detailed_sync(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str | None:
-    """Returns None if summarization fails after all retries."""
+def _summarize_detailed_sync(chapter_title: str, source_text: str, settings: LLMSettings, prompt_file: str) -> str:
+    """Generate detailed chapter summary. Raises on failure (no fallback)."""
     system = load_prompt(prompt_file)
     user = f"CHAPTER TITLE: {chapter_title}\n\nSOURCE TEXT:\n{source_text}"
-    try:
-        return _call_text_sync(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            settings,
-        )
-    except Exception as e:
-        print(f"   ❌ Detailed summary failed for '{chapter_title}': {e}", flush=True)
-        return None
+    return _call_text_sync(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        settings,
+    )
 
 
 def summarize_chapters(
@@ -93,49 +86,31 @@ def summarize_chapters(
     total = len(chapter_payloads)
 
     # ---- SHORT SUMMARIES ----
-    short_failed = []
     for idx, title, text in chapter_payloads:
         print(f"   📤 Short sent: {title}", flush=True)
-        result = _summarize_short_sync(title, text, short_settings, short_prompt_file)
-        artifact.chapters[idx].short_summary = result
-        if result:
-            print(f"   ✅ Short done: {title}", flush=True)
-        else:
-            print(f"   ❌ Short FAILED: {title}", flush=True)
-            short_failed.append(title)
+        artifact.chapters[idx].short_summary = _summarize_short_sync(
+            title, text, short_settings, short_prompt_file
+        )
+        print(f"   ✅ Short done: {title}", flush=True)
 
     # ---- DETAILED SUMMARIES ----
-    detail_failed = []
     for idx, title, text in chapter_payloads:
         print(f"   📤 Detail sent: {title}", flush=True)
-        result = _summarize_detailed_sync(title, text, detailed_settings, detailed_prompt_file)
-        artifact.chapters[idx].detailed_summary = result
-        if result:
-            print(f"   ✅ Detail done: {title}", flush=True)
-        else:
-            print(f"   ❌ Detail FAILED: {title}", flush=True)
-            detail_failed.append(title)
+        artifact.chapters[idx].detailed_summary = _summarize_detailed_sync(
+            title, text, detailed_settings, detailed_prompt_file
+        )
+        print(f"   ✅ Detail done: {title}", flush=True)
 
     # ---- REPORT ----
-    all_failed = set(short_failed + detail_failed)
-    if all_failed:
-        stage.status = "partial"
-        failures = "; ".join(sorted(all_failed))
-        stage.notes = f"Summaries generated with {len(all_failed)} failure(s): {failures}"
-        print(f"   ⚠️ Chapter summaries: {total - len(short_failed)}/{total} short, "
-              f"{total - len(detail_failed)}/{total} detailed OK. Failed: {failures}", flush=True)
-    else:
-        stage.status = "done"
-        stage.notes = "All chapter summaries generated successfully."
-        print(f"   ✅ Chapter summaries complete: {total} chapters", flush=True)
+    stage.status = "done"
+    stage.notes = "All chapter summaries generated successfully."
+    print(f"   ✅ Chapter summaries complete: {total} chapters", flush=True)
 
     stage.outputs = {
         "chapter_count": chapter_count,
         "parallel_calls": 1,
         "short_model": short_settings.model,
         "detailed_model": detailed_settings.model,
-        "short_failures": short_failed,
-        "detail_failures": detail_failed,
     }
     return artifact.touch()
 
@@ -169,30 +144,23 @@ def synthesize_overview(
 
     print(f"   🤖 Calling {ultra_dense_settings.model} for abstract...", flush=True)
 
-    try:
-        result = _call_text_sync(
-            [
-                {
-                    "role": "system",
-                    "content": load_prompt(prompt_file),
-                },
-                {"role": "user", "content": chapter_summaries},
-            ],
-            ultra_dense_settings,
-        )
-        if result:
-            artifact.overview.ultra_dense_summary = result
-            stage.status = "done"
-            stage.notes = "Abstract generated successfully."
-            print("   ✅ Abstract complete", flush=True)
-        else:
-            stage.status = "failed"
-            stage.notes = "Abstract call returned empty response."
-            print("   ❌ Abstract returned empty — overview not written.", flush=True)
-    except Exception as e:
-        stage.status = "failed"
-        stage.notes = f"Abstract call failed: {e}"
-        print(f"   ❌ Abstract failed: {e}", flush=True)
+    result = _call_text_sync(
+        [
+            {
+                "role": "system",
+                "content": load_prompt(prompt_file),
+            },
+            {"role": "user", "content": chapter_summaries},
+        ],
+        ultra_dense_settings,
+    )
+    if not result:
+        raise RuntimeError("Abstract call returned empty response — cannot produce final output.")
+
+    artifact.overview.ultra_dense_summary = result
+    stage.status = "done"
+    stage.notes = "Abstract generated successfully."
+    print("   ✅ Abstract complete", flush=True)
 
     stage.outputs = {
         "chapter_count": len(artifact.chapters),

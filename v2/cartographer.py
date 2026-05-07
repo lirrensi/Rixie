@@ -116,8 +116,15 @@ def generate_block_mini_summaries(
     parallel_calls: int = 8,  # IGNORED - always sequential now
     prompt_file: str = "prompt_block_mini_summary.md",
     save_every: int = 5,  # IGNORED - save every block now
+    max_per_block_retries: int = 3,
 ) -> BookArtifact:
-    """Generate mini summaries SEQUENTIALLY with BLOCKING SYNC saves after each block."""
+    """Generate mini summaries SEQUENTIALLY with per-block retry and sync saves.
+
+    Blocks that fail after all retries are force-marked as useful=False
+    so the cartographer never sees a block with a missing fingerprint.
+    """
+    import time as time_mod
+
     artifact.stages.setdefault(MINI_SUMMARIES_STAGE, StageState(name=MINI_SUMMARIES_STAGE))
     stage = artifact.stages[MINI_SUMMARIES_STAGE]
     stage.status = "running"
@@ -144,45 +151,67 @@ def generate_block_mini_summaries(
 
     print(f"   → Resuming {len(pending_indices)} pending blocks (skipping {total - len(pending_indices)} complete)", flush=True)
 
-    print(f"   🔥 Processing {len(pending_indices)} blocks SEQUENTIALLY - NO PARALLEL", flush=True)
+    print(f"   🔥 Processing {len(pending_indices)} blocks SEQUENTIALLY "
+          f"(max {max_per_block_retries} retries per block)", flush=True)
     save_count = 0
 
-    # Process ONE block at a time
+    # Process ONE block at a time, with per-block retries
     for idx in pending_indices:
         block = artifact.blocks[idx]
         print(f"   📤 Processing {idx+1}/{total}: {block.block_id}", flush=True)
 
-        try:
-            result = _call_json_sync(
-                [
-                    {"role": "system", "content": load_prompt(prompt_file)},
-                    {"role": "user", "content": f"BLOCK:\\n{block.text}"},
-                ],
-                llm_settings,
-                response_model=MiniSummaryResult,
+        success = False
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_per_block_retries + 1):
+            try:
+                result = _call_json_sync(
+                    [
+                        {"role": "system", "content": load_prompt(prompt_file)},
+                        {"role": "user", "content": f"BLOCK:\\n{block.text}"},
+                    ],
+                    llm_settings,
+                    response_model=MiniSummaryResult,
+                )
+
+                # Update artifact in memory
+                artifact.blocks[idx].mini_summary = result.mini_summary
+                artifact.blocks[idx].useful = result.useful
+                success = True
+
+                # TRUE SYNC SAVE to disk - BLOCKING until complete
+                save_artifact_with_lock(artifact, book_yaml_path)
+
+                # VERIFY save by re-reading
+                verify_data = book_yaml_path.read_text(encoding="utf-8")
+                verify_yaml = yaml.safe_load(verify_data)
+                verify_block = verify_yaml['blocks'][idx]
+
+                if verify_block['mini_summary'] != result.mini_summary or verify_block['useful'] != result.useful:
+                    print(f"   ❌ VERIFY FAILED for block {idx+1} - SAVE CORRUPT!", flush=True)
+                    raise RuntimeError(f"Save verification failed for block {idx+1}")
+
+                print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → useful={result.useful}"
+                      f"{f' (attempt {attempt}/{max_per_block_retries})' if attempt > 1 else ''}", flush=True)
+                break
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_per_block_retries:
+                    delay = 2 ** attempt  # exponential backoff: 2, 4, 8, ...
+                    print(f"   ↻ Retry {attempt}/{max_per_block_retries} for {block.block_id} "
+                          f"after {delay}s: {type(e).__name__}", flush=True)
+                    time_mod.sleep(delay)
+
+        if not success:
+            # All retries exhausted — HARD FAIL. The cartographer cannot
+            # produce valid chapter mappings with missing block fingerprints.
+            # Let the caller catch this and move on to the next book.
+            raise RuntimeError(
+                f"Block {block.block_id} failed after {max_per_block_retries} retry attempts. "
+                f"Last error: {type(last_error).__name__}: {last_error}. "
+                f"Cannot proceed to cartography with incomplete block summaries."
             )
-
-            # Update artifact in memory
-            artifact.blocks[idx].mini_summary = result.mini_summary
-            artifact.blocks[idx].useful = result.useful
-
-            # TRUE SYNC SAVE to disk - BLOCKING until complete
-            save_artifact_with_lock(artifact, book_yaml_path)
-
-            # VERIFY save by re-reading
-            verify_data = book_yaml_path.read_text(encoding="utf-8")
-            verify_yaml = yaml.safe_load(verify_data)
-            verify_block = verify_yaml['blocks'][idx]
-
-            if verify_block['mini_summary'] != result.mini_summary or verify_block['useful'] != result.useful:
-                print(f"   ❌ VERIFY FAILED for block {idx+1} - SAVE CORRUPT!", flush=True)
-                raise RuntimeError(f"Save verification failed for block {idx+1}")
-
-            print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → useful={result.useful}", flush=True)
-
-        except Exception as e:
-            print(f"   ✗ Fail {idx+1}/{total}: {block.block_id} → {e}", flush=True)
-            # Still save even failed blocks for resume capability
 
         save_count += 1
         print(f"   💾 BLOCK SAVE {idx+1}/{total} COMPLETE & VERIFIED", flush=True)
@@ -304,8 +333,20 @@ def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: l
 
     if covered != useful_ids:
         uncovered = [b for b in useful_ids if b not in covered]
-        print(f"   ⚠️ Chapters cover {len(covered)}/{len(useful_ids)} useful blocks "
-              f"({len(uncovered)} uncovered, first: {uncovered[0] if uncovered else 'N/A'})", flush=True)
+        if uncovered:
+            # Gaps in the chapter map: some useful blocks are not assigned to any chapter.
+            # This means the LLM produced an incomplete chapter design — hard fail.
+            raise ValueError(
+                f"Chapter map is incomplete: {len(uncovered)} useful block(s) not covered by any chapter. "
+                f"Missing: {uncovered[:5]}{'...' if len(uncovered) > 5 else ''}. "
+                f"The LLM must produce chapter boundaries that tile all useful blocks without gaps."
+            )
+        # If we get here: no uncovered blocks, but covered has duplicates (overlapping chapters).
+        # This is a warning — chapters should ideally not overlap.
+        overlap_count = len(covered) - len(useful_ids)
+        print(f"   ⚠️ Chapter overlap detected: {overlap_count} duplicate block assignments "
+              f"({len(covered)} entries for {len(useful_ids)} unique blocks). "
+              f"Chapters should not overlap.", flush=True)
     return chapters
 
 
@@ -316,9 +357,11 @@ def group_blocks_into_chapters(
     llm_settings: LLMSettings,
     prompt_file: str = "prompt_cartographer_map.md",
 ) -> BookArtifact:
-    """Group blocks into chapters - SYNCHRONOUS."""
-    import traceback
+    """Group blocks into chapters - SYNCHRONOUS.
 
+    Any failure after all retries is a hard stop — the exception propagates
+    to the caller so the book is skipped entirely (no partial output).
+    """
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
     useful_blocks = [block for block in artifact.blocks if block.useful is not False]
@@ -395,52 +438,42 @@ def group_blocks_into_chapters(
     print(f"    timeout: {llm_settings.timeout}")
     sys.stdout.flush()
 
-    try:
-        print(f"\n🚀 About to call _call_json_sync...")
-        parsed = _call_json_sync(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            llm_settings,
-            response_model=ChapterMapResult,
-        )
-        print(f"\n✅ Got response!")
-        print(f"📚 Parsed {len(parsed.chapters)} chapter(s) from response")
-        for i, chapter in enumerate(parsed.chapters):
-            print(f"  Chapter {i+1}: {chapter.title}")
-            print(f"    Start: {chapter.block_start}, End: {chapter.block_end}")
+    print(f"\n🚀 About to call _call_json_sync...")
+    parsed = _call_json_sync(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        llm_settings,
+        response_model=ChapterMapResult,
+    )
+    print(f"\n✅ Got response!")
+    print(f"📚 Parsed {len(parsed.chapters)} chapter(s) from response")
+    for i, chapter in enumerate(parsed.chapters):
+        print(f"  Chapter {i+1}: {chapter.title}")
+        print(f"    Start: {chapter.block_start}, End: {chapter.block_end}")
 
-        # Remap renumbered block IDs back to original artifact block IDs
-        for chapter in parsed.chapters:
-            chapter.block_start = reverse_map.get(chapter.block_start, chapter.block_start)
-            chapter.block_end = reverse_map.get(chapter.block_end, chapter.block_end)
+    # Remap renumbered block IDs back to original artifact block IDs
+    for chapter in parsed.chapters:
+        chapter.block_start = reverse_map.get(chapter.block_start, chapter.block_start)
+        chapter.block_end = reverse_map.get(chapter.block_end, chapter.block_end)
 
-        artifact.chapters = _validate_and_materialize_chapters(artifact, parsed.chapters)
-        stage.status = "done"
-        stage.notes = "Generated chapter map from ordered mini-summaries."
-        print(f"\n✓ Cartographer mapped {len(artifact.chapters)} chapter(s)")
+    artifact.chapters = _validate_and_materialize_chapters(artifact, parsed.chapters)
+    stage.status = "done"
+    stage.notes = "Generated chapter map from ordered mini-summaries."
+    print(f"\n✓ Cartographer mapped {len(artifact.chapters)} chapter(s)")
 
-        # SYNC SAVE & VERIFY chapter mapping
-        book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
-        save_artifact_with_lock(artifact, book_yaml_path)
+    # SYNC SAVE & VERIFY chapter mapping
+    book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
+    save_artifact_with_lock(artifact, book_yaml_path)
 
-        # VERIFY chapter data saved correctly
-        verify_data = yaml.safe_load(book_yaml_path.read_text(encoding="utf-8"))
-        if len(verify_data.get('chapters', [])) != len(artifact.chapters):
-            print(f"   ❌ VERIFY FAILED - chapters count mismatch!", flush=True)
-            raise RuntimeError("Chapter save verification failed")
+    # VERIFY chapter data saved correctly
+    verify_data = yaml.safe_load(book_yaml_path.read_text(encoding="utf-8"))
+    if len(verify_data.get('chapters', [])) != len(artifact.chapters):
+        print(f"   ❌ VERIFY FAILED - chapters count mismatch!", flush=True)
+        raise RuntimeError("Chapter save verification failed")
 
-        print(f"💾 SAVED & VERIFIED chapter mapping", flush=True)
-    except (ValidationError, ValueError, Exception) as e:
-        print(f"\n❌ ERROR TYPE: {type(e).__name__}")
-        print(f"❌ ERROR MSG: {e}")
-        print(f"\n❌ FULL TRACEBACK:")
-        print(traceback.format_exc(), flush=True)
-        artifact.chapters = []
-        stage.status = "failed"
-        stage.notes = f"Cartographer LLM failed: {e}"
-        print(f"\n✗ Cartographer failed: {e}")
+    print(f"💾 SAVED & VERIFIED chapter mapping", flush=True)
 
     stage.outputs = {
         **stage.outputs,
