@@ -24,6 +24,7 @@ if __package__ in {None, ""}:
 
 from v2.cartographer import LLMSettings, generate_block_mini_summaries, group_blocks_into_chapters, map_book_structure
 from v2.config import load_repo_config, load_v2_config, resolve_profile
+from v2.export_epub import export_epub
 from v2.ingest import detect_format, ingest_source
 from v2.renderer import render_outputs
 from v2.schema import BookArtifact, DocumentMetadata, StageState
@@ -64,6 +65,7 @@ def build_artifact(source_path: Path | None, slug: str) -> BookArtifact:
             "chapter_summaries": StageState(name="chapter_summaries", status="pending"),
             "overview": StageState(name="overview", status="pending"),
             "render": StageState(name="render", status="pending"),
+            "epub": StageState(name="epub", status="pending"),
         },
         notes=["V2 scaffold initialized."],
     )
@@ -71,7 +73,7 @@ def build_artifact(source_path: Path | None, slug: str) -> BookArtifact:
 
 
 def ensure_stage_defaults(artifact: BookArtifact) -> BookArtifact:
-    stage_names = ["ingest", "mini_summaries", "cartography", "chapter_summaries", "overview", "render"]
+    stage_names = ["ingest", "mini_summaries", "cartography", "chapter_summaries", "overview", "render", "epub"]
     for stage_name in stage_names:
         artifact.stages.setdefault(stage_name, StageState(name=stage_name))
     return artifact
@@ -124,6 +126,8 @@ def prepare_workspace(
     window_tokens: int = 8000,
     max_boundaries_per_window: int = 16,
     overlap_pct: float = 0.05,
+    # Checkpoint throttling
+    checkpoint_pct: float = 5.0,
 ) -> tuple[Path, Path, Path]:
     slug = slugify(source_path.name if source_path else "book")
     workspace_dir = books_dir / slug
@@ -196,6 +200,7 @@ def prepare_workspace(
             llm_settings=mini_summary_settings,
             parallel_calls=1,  # Always 1 - no parallel
             prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
+            checkpoint_pct=checkpoint_pct,
         )
         useful = sum(1 for b in artifact.blocks if b.useful)
         print(f"   ✅ Mini summaries done: {useful}/{len(artifact.blocks)} useful")
@@ -221,11 +226,13 @@ def prepare_workspace(
         print("   [5/6] Writing chapter summaries...")
         artifact = summarize_chapters(
             artifact,
+            workspace_dir,
             short_settings=short_summary_settings,
             detailed_settings=detailed_summary_settings,
             parallel_calls=1,
             short_prompt_file=str(chapter_short_profile.get("prompt_file", "prompt_chapter_short.md")),
             detailed_prompt_file=str(chapter_long_profile.get("prompt_file", "prompt_chapter_detailed.md")),
+            checkpoint_pct=checkpoint_pct,
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["chapter_summaries"].status == "done":
@@ -245,6 +252,26 @@ def prepare_workspace(
     print("   [render] Writing HTML...")
     artifact = render_outputs(artifact, workspace_dir)
     source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
+
+    if artifact.stages["epub"].status != "done":
+        print("   [epub] Writing EPUB...")
+        try:
+            epub_path = export_epub(workspace_dir)
+            artifact.stages["epub"] = StageState(
+                name="epub", status="done",
+                notes=f"Exported {epub_path.name}",
+                outputs={"epub": str(epub_path.name)},
+            )
+        except Exception as e:
+            artifact.stages["epub"] = StageState(
+                name="epub", status="failed",
+                notes=f"EPUB export failed: {e}",
+            )
+            print(f"   ⚠️  EPUB export failed (non-fatal): {e}")
+        source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
+    else:
+        print("   [epub] EPUB skipped (already complete)")
+
     return workspace_dir, source_md_path, book_yaml_path
 
 
@@ -368,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                 window_tokens=int(blocking.get("window_tokens", 8000)),
                 max_boundaries_per_window=int(blocking.get("max_boundaries_per_window", 16)),
                 overlap_pct=float(blocking.get("overlap_pct", 0.05)),
+                checkpoint_pct=float(execution.get("checkpoint_pct", 5.0)),
             )
 
             print(f"✅ V2 workspace ready: {workspace_dir}")

@@ -89,3 +89,4 @@ v2:
     overlap_pct: 0.05               # Overlap between adjacent windows (5%)
   execution:
     parallel_calls: 1               # Parallel lightweight LLM calls (set 1 for chunky/local runs)
+    checkpoint_pct: 5.0              # Save progress every N% of blocks/chapters (0=every step, 100=only at end)

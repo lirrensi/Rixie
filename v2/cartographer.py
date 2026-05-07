@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
     tiktoken = None
 
 from v2.blocker import build_blocks
+from v2.checkpoint import CheckpointTracker, save_artifact_sync
 from v2.pipeline import structured_completion
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, BlockArtifact, ChapterArtifact, StageState
@@ -99,15 +100,6 @@ def _call_json_sync(
     return structured_completion(settings, messages, response_model)
 
 
-def save_artifact_with_lock(artifact: BookArtifact, book_yaml_path: Path):
-    """Save artifact directly to disk with sync flush."""
-    yaml_content = yaml.safe_dump(artifact.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
-    with open(book_yaml_path, 'w', encoding='utf-8') as f:
-        f.write(yaml_content)
-        f.flush()
-        os.fsync(f.fileno())
-
-
 def generate_block_mini_summaries(
     artifact: BookArtifact,
     workspace_dir: Path,
@@ -115,13 +107,14 @@ def generate_block_mini_summaries(
     llm_settings: LLMSettings,
     parallel_calls: int = 8,  # IGNORED - always sequential now
     prompt_file: str = "prompt_block_mini_summary.md",
-    save_every: int = 5,  # IGNORED - save every block now
+    checkpoint_pct: float = 5.0,
     max_per_block_retries: int = 3,
 ) -> BookArtifact:
-    """Generate mini summaries SEQUENTIALLY with per-block retry and sync saves.
+    """Generate mini summaries SEQUENTIALLY with per-block retry and checkpoint saves.
 
-    Blocks that fail after all retries are force-marked as useful=False
-    so the cartographer never sees a block with a missing fingerprint.
+    Saves the artifact to disk every ``checkpoint_pct`` % of progress (default 5 %)
+    so crashes lose at most one checkpoint interval of work.  Blocks that fail
+    after all retries raise RuntimeError — the book is skipped entirely.
     """
     import time as time_mod
 
@@ -132,7 +125,7 @@ def generate_block_mini_summaries(
 
     # SYNC SAVE initial status
     book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
-    save_artifact_with_lock(artifact, book_yaml_path)
+    save_artifact_sync(artifact, book_yaml_path)
 
     total = len(artifact.blocks)
     print(f"   🔍 Mini summaries: {total} block(s)", flush=True)
@@ -152,8 +145,9 @@ def generate_block_mini_summaries(
     print(f"   → Resuming {len(pending_indices)} pending blocks (skipping {total - len(pending_indices)} complete)", flush=True)
 
     print(f"   🔥 Processing {len(pending_indices)} blocks SEQUENTIALLY "
-          f"(max {max_per_block_retries} retries per block)", flush=True)
-    save_count = 0
+          f"(max {max_per_block_retries} retries per block, save every {checkpoint_pct:.0f}%)", flush=True)
+
+    checkpoint = CheckpointTracker(len(pending_indices), every_pct=checkpoint_pct)
 
     # Process ONE block at a time, with per-block retries
     for idx in pending_indices:
@@ -179,17 +173,10 @@ def generate_block_mini_summaries(
                 artifact.blocks[idx].useful = result.useful
                 success = True
 
-                # TRUE SYNC SAVE to disk - BLOCKING until complete
-                save_artifact_with_lock(artifact, book_yaml_path)
-
-                # VERIFY save by re-reading
-                verify_data = book_yaml_path.read_text(encoding="utf-8")
-                verify_yaml = yaml.safe_load(verify_data)
-                verify_block = verify_yaml['blocks'][idx]
-
-                if verify_block['mini_summary'] != result.mini_summary or verify_block['useful'] != result.useful:
-                    print(f"   ❌ VERIFY FAILED for block {idx+1} - SAVE CORRUPT!", flush=True)
-                    raise RuntimeError(f"Save verification failed for block {idx+1}")
+                # Throttled checkpoint save (not every block — every N%)
+                if checkpoint.should_save():
+                    save_artifact_sync(artifact, book_yaml_path)
+                    print(f"   💾 Checkpoint save at {checkpoint.progress_pct:.0f}% ({idx+1}/{total})", flush=True)
 
                 print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → useful={result.useful}"
                       f"{f' (attempt {attempt}/{max_per_block_retries})' if attempt > 1 else ''}", flush=True)
@@ -213,18 +200,9 @@ def generate_block_mini_summaries(
                 f"Cannot proceed to cartography with incomplete block summaries."
             )
 
-        save_count += 1
-        print(f"   💾 BLOCK SAVE {idx+1}/{total} COMPLETE & VERIFIED", flush=True)
-
-    # Final SYNC SAVE & VERIFY complete results
-    save_artifact_with_lock(artifact, book_yaml_path)
-
-    # Verify all blocks are saved
-    verify_data = yaml.safe_load(book_yaml_path.read_text(encoding="utf-8"))
-    verify_artifact = BookArtifact.model_validate(verify_data)
-    partial_count = sum(1 for b in verify_artifact.blocks if b.mini_summary is None or b.useful is None)
-
-    print(f"   💾 FINAL SAVE COMPLETE & VERIFIED ({len(artifact.blocks)} blocks)", flush=True)
+    # Final anchor save — ensures even the last few blocks are persisted
+    save_artifact_sync(artifact, book_yaml_path)
+    print(f"   💾 Final save complete ({len(artifact.blocks)} blocks)", flush=True)
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
     failures = sum(1 for idx, block in enumerate(artifact.blocks) if block.mini_summary is None)
@@ -545,7 +523,7 @@ def group_blocks_into_chapters(
 
     # SYNC SAVE & VERIFY chapter mapping
     book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
-    save_artifact_with_lock(artifact, book_yaml_path)
+    save_artifact_sync(artifact, book_yaml_path)
 
     # VERIFY chapter data saved correctly
     verify_data = yaml.safe_load(book_yaml_path.read_text(encoding="utf-8"))

@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from v2.cartographer import LLMSettings
+from v2.checkpoint import CheckpointTracker, save_artifact_sync
 from v2.pipeline import completion_with_retry
 from v2.prompts import load_prompt
 from v2.schema import BookArtifact, StageState
@@ -64,12 +66,14 @@ def _summarize_detailed_sync(chapter_title: str, source_text: str, settings: LLM
 
 def summarize_chapters(
     artifact: BookArtifact,
+    workspace_dir: Path,
     *,
     short_settings: LLMSettings,
     detailed_settings: LLMSettings,
     parallel_calls: int = 1,  # IGNORED - always sequential
     short_prompt_file: str = "prompt_chapter_short.md",
     detailed_prompt_file: str = "prompt_chapter_detailed.md",
+    checkpoint_pct: float = 5.0,
 ) -> BookArtifact:
     artifact.stages.setdefault(CHAPTER_SUMMARIES_STAGE, StageState(name=CHAPTER_SUMMARIES_STAGE))
     stage = artifact.stages[CHAPTER_SUMMARIES_STAGE]
@@ -86,19 +90,30 @@ def summarize_chapters(
     total = len(chapter_payloads)
 
     # ---- SHORT SUMMARIES ----
+    book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
+    save_artifact_sync(artifact, book_yaml_path)  # initial state
+
+    short_ck = CheckpointTracker(total, every_pct=checkpoint_pct)
     for idx, title, text in chapter_payloads:
         print(f"   📤 Short sent: {title}", flush=True)
         artifact.chapters[idx].short_summary = _summarize_short_sync(
             title, text, short_settings, short_prompt_file
         )
+        if short_ck.should_save():
+            save_artifact_sync(artifact, book_yaml_path)
+            print(f"   💾 Checkpoint save short: {short_ck.progress_pct:.0f}%", flush=True)
         print(f"   ✅ Short done: {title}", flush=True)
 
     # ---- DETAILED SUMMARIES ----
+    detailed_ck = CheckpointTracker(total, every_pct=checkpoint_pct)
     for idx, title, text in chapter_payloads:
         print(f"   📤 Detail sent: {title}", flush=True)
         artifact.chapters[idx].detailed_summary = _summarize_detailed_sync(
             title, text, detailed_settings, detailed_prompt_file
         )
+        if detailed_ck.should_save():
+            save_artifact_sync(artifact, book_yaml_path)
+            print(f"   💾 Checkpoint save detailed: {detailed_ck.progress_pct:.0f}%", flush=True)
         print(f"   ✅ Detail done: {title}", flush=True)
 
     # ---- REPORT ----
