@@ -284,19 +284,35 @@ def _snap_to_useful(
     return None
 
 
-def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: list[ChapterRange]) -> list[ChapterArtifact]:
+def _validate_and_materialize_chapters(
+    artifact: BookArtifact,
+    chapter_ranges: list[ChapterRange],
+) -> tuple[list[ChapterArtifact], list[str]]:
+    """Validate and materialize chapter ranges.
+
+    Returns:
+        (chapters, []) on success — every useful block appears exactly once.
+        ([], errors) on failure — errors explain gaps and overlaps for LLM feedback.
+    """
     by_id = {block.block_id: block for block in artifact.blocks}
     useful_ids = [block.block_id for block in artifact.blocks if block.useful is not False]
     if not useful_ids:
-        return []
+        return [], []
 
+    errors: list[str] = []
     chapters: list[ChapterArtifact] = []
     covered: list[str] = []
+
     for order, chapter in enumerate(chapter_ranges, start=1):
         if chapter.block_start not in by_id or chapter.block_end not in by_id:
-            raise ValueError("Chapter references unknown block ids")
+            errors.append(
+                f"Unknown block ID in chapter '{chapter.title}': "
+                f"{chapter.block_start} or {chapter.block_end} does not exist"
+            )
+            continue
 
-        # Snap boundaries to nearest useful blocks (LLM may reference non-useful blocks)
+        # Snap boundaries to nearest useful blocks (defense-in-depth;
+        # with renumbering the LLM should never reference non-useful blocks)
         start_id = _snap_to_useful(
             chapter.block_start, useful_ids=useful_ids, by_id=by_id, direction="forward"
         )
@@ -305,13 +321,18 @@ def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: l
         )
 
         if start_id is None or end_id is None:
-            print(f"   ⚠️ Chapter '{chapter.title}': could not snap boundary to useful block — skipping", flush=True)
+            errors.append(
+                f"Chapter '{chapter.title}': could not resolve boundary "
+                f"({chapter.block_start} or {chapter.block_end}) to a useful block"
+            )
             continue
 
         start_idx = useful_ids.index(start_id)
         end_idx = useful_ids.index(end_id)
         if end_idx < start_idx:
-            print(f"   ⚠️ Chapter '{chapter.title}': snapped boundaries out of order ({start_id} > {end_id}) — skipping", flush=True)
+            errors.append(
+                f"Chapter '{chapter.title}': end block ({end_id}) comes before start block ({start_id})"
+            )
             continue
 
         block_ids = useful_ids[start_idx : end_idx + 1]
@@ -331,23 +352,31 @@ def _validate_and_materialize_chapters(artifact: BookArtifact, chapter_ranges: l
             )
         )
 
-    if covered != useful_ids:
-        uncovered = [b for b in useful_ids if b not in covered]
-        if uncovered:
-            # Gaps in the chapter map: some useful blocks are not assigned to any chapter.
-            # This means the LLM produced an incomplete chapter design — hard fail.
-            raise ValueError(
-                f"Chapter map is incomplete: {len(uncovered)} useful block(s) not covered by any chapter. "
-                f"Missing: {uncovered[:5]}{'...' if len(uncovered) > 5 else ''}. "
-                f"The LLM must produce chapter boundaries that tile all useful blocks without gaps."
-            )
-        # If we get here: no uncovered blocks, but covered has duplicates (overlapping chapters).
-        # This is a warning — chapters should ideally not overlap.
-        overlap_count = len(covered) - len(useful_ids)
-        print(f"   ⚠️ Chapter overlap detected: {overlap_count} duplicate block assignments "
-              f"({len(covered)} entries for {len(useful_ids)} unique blocks). "
-              f"Chapters should not overlap.", flush=True)
-    return chapters
+    # Check for gaps: useful blocks not covered by any chapter
+    uncovered = [b for b in useful_ids if b not in covered]
+    if uncovered:
+        preview = uncovered[:5]
+        errors.append(
+            f"GAP: {len(uncovered)} useful block(s) are not covered by any chapter. "
+            f"Missing: {preview}{'...' if len(uncovered) > 5 else ''}. "
+            f"Every block must appear in exactly one chapter."
+        )
+
+    # Check for overlaps: blocks appearing in multiple chapters
+    if len(covered) != len(set(covered)):
+        from collections import Counter
+        dupes = sorted(bid for bid, count in Counter(covered).items() if count > 1)
+        preview = dupes[:5]
+        errors.append(
+            f"OVERLAP: {len(dupes)} block(s) appear in multiple chapters. "
+            f"Duplicated: {preview}{'...' if len(dupes) > 5 else ''}. "
+            f"Each block must belong to exactly one chapter."
+        )
+
+    if errors:
+        return [], errors
+
+    return chapters, []
 
 
 def group_blocks_into_chapters(
@@ -428,40 +457,91 @@ def group_blocks_into_chapters(
     print(user)
     print(f"{'='*80}\n")
 
-    print(f"\n🤖 Calling {llm_settings.model} to group into chapters...", flush=True)
+    print(f"\n🤖 Multi-turn cartography: up to 6 turns with validation feedback", flush=True)
     print(f"🔧 LLM settings:")
     print(f"    model: {llm_settings.model}")
     print(f"    temperature: {llm_settings.temperature}")
     print(f"    thinking: {llm_settings.thinking}")
     print(f"    api_base: {llm_settings.api_base}")
-    print(f"    api_key: {llm_settings.api_key}")
-    print(f"    timeout: {llm_settings.timeout}")
     sys.stdout.flush()
 
-    print(f"\n🚀 About to call _call_json_sync...")
-    parsed = _call_json_sync(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        llm_settings,
-        response_model=ChapterMapResult,
-    )
-    print(f"\n✅ Got response!")
-    print(f"📚 Parsed {len(parsed.chapters)} chapter(s) from response")
-    for i, chapter in enumerate(parsed.chapters):
-        print(f"  Chapter {i+1}: {chapter.title}")
-        print(f"    Start: {chapter.block_start}, End: {chapter.block_end}")
+    MAX_TURNS = 6
+    base_user = "ORDERED BLOCK SUMMARIES:\\n" + "\\n".join(block_lines)
+    feedback = ""
+    last_parsed = None
 
-    # Remap renumbered block IDs back to original artifact block IDs
-    for chapter in parsed.chapters:
-        chapter.block_start = reverse_map.get(chapter.block_start, chapter.block_start)
-        chapter.block_end = reverse_map.get(chapter.block_end, chapter.block_end)
+    for turn in range(1, MAX_TURNS + 1):
+        print(f"\n{'─'*60}")
+        print(f"🔄 TURN {turn}/{MAX_TURNS}", flush=True)
 
-    artifact.chapters = _validate_and_materialize_chapters(artifact, parsed.chapters)
-    stage.status = "done"
-    stage.notes = "Generated chapter map from ordered mini-summaries."
-    print(f"\n✓ Cartographer mapped {len(artifact.chapters)} chapter(s)")
+        # Build user message: base summaries + optional validation feedback
+        if feedback:
+            user = (
+                base_user
+                + "\n\n---\n❌ YOUR PREVIOUS CHAPTER MAP WAS REJECTED:\n"
+                + feedback
+                + "\n---\nPlease fix ALL of the issues above and return a corrected chapter map."
+            )
+        else:
+            user = base_user
+
+        print(f"\n🚀 Calling _call_json_sync (turn {turn})...")
+        parsed = _call_json_sync(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            llm_settings,
+            response_model=ChapterMapResult,
+        )
+        last_parsed = parsed
+
+        print(f"\n✅ Turn {turn} response: {len(parsed.chapters)} chapter(s)")
+        for i, chapter in enumerate(parsed.chapters):
+            print(f"  Chapter {i+1}: {chapter.title}")
+            print(f"    Start: {chapter.block_start}, End: {chapter.block_end}")
+
+        # Remap renumbered block IDs back to original artifact block IDs
+        for chapter in parsed.chapters:
+            chapter.block_start = reverse_map.get(chapter.block_start, chapter.block_start)
+            chapter.block_end = reverse_map.get(chapter.block_end, chapter.block_end)
+
+        # Validate
+        validated_chapters, errors = _validate_and_materialize_chapters(artifact, parsed.chapters)
+
+        if not errors:
+            # ── SUCCESS ──
+            print(f"\n✅ VALIDATION PASSED on turn {turn}!")
+            artifact.chapters = validated_chapters
+            stage.status = "done"
+            stage.notes = f"Generated chapter map from ordered mini-summaries (turn {turn}/{MAX_TURNS})."
+            break
+
+        # ── FAILED ── build feedback for next turn ──
+        feedback = (
+            f"The chapter map had {len(errors)} validation error(s):\n"
+            + "\n".join(f"  • {e}" for e in errors)
+        )
+        print(f"\n❌ VALIDATION FAILED (turn {turn}):", flush=True)
+        for e in errors:
+            print(f"   • {e}", flush=True)
+
+        if turn == MAX_TURNS:
+            raise RuntimeError(
+                f"Cartographer failed after {MAX_TURNS} turns. "
+                f"Last validation errors:\n{feedback}"
+            )
+
+        print(f"   🔁 Feeding errors back to LLM for turn {turn + 1}...", flush=True)
+
+    # If we exhausted all turns without success, last_parsed is set but validation failed
+    if not artifact.chapters:
+        raise RuntimeError(
+            f"Cartographer failed after {MAX_TURNS} turns — "
+            f"no valid chapter map produced. Last response had {len(last_parsed.chapters) if last_parsed else 0} chapters."
+        )
+
+    print(f"\n✓ Cartographer mapped {len(artifact.chapters)} chapter(s) in {turn} turn(s)")
 
     # SYNC SAVE & VERIFY chapter mapping
     book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml

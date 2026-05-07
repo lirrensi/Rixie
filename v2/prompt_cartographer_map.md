@@ -13,9 +13,13 @@ Given ordered block mini-summaries, design optimal chapters by grouping semantic
 # Constraints
 - Never reorder blocks or create gaps.
 - Use ONLY block IDs that appear in the input below. Do NOT infer, interpolate, or guess block IDs from numbering patterns — every block_start/block_end MUST be an ID you actually see in the provided summaries.
+- Every block must belong to EXACTLY ONE chapter — no overlaps, no uncovered blocks.
 - Return strict JSON only, no markdown fences, no prose outside JSON.
 - If input contains no useful blocks, return an empty chapters array.
 - Design for downstream LLM constant-output-density constraints — your chapters directly affect extraction quality.
+
+# Multi-turn validation
+Your chapter map will be validated automatically. If it has gaps (uncovered blocks) or overlaps (blocks in multiple chapters), you will receive specific error feedback and be asked to correct the map. Study the feedback carefully and fix ALL issues in your next response.
 
 # Stop rules
 If the block sequence is too fragmented for coherent chapters (e.g., no clear semantic clusters), still produce chapter boundaries following time/sequence flow rather than failing.
