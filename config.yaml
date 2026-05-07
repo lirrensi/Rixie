@@ -80,8 +80,12 @@ v2:
 
   blocking:
     encoding_model: "gpt-4o-mini"  # Tokenizer model for synthetic page splitting
-    target_tokens: 4096             # Target synthetic-page size
-    min_tokens: 3884                 # Prefer not to split below this unless needed
+    target_tokens: 4096             # Target synthetic-page size (mechanical fallback)
+    min_tokens: 3884                # Prefer not to split below this unless needed
     max_tokens: 4396                # Hard-ish cap before forcing a split
+    # Step 0: Precise LLM boundary detection
+    window_tokens: 8000             # Token budget per LLM chunking window
+    max_boundaries_per_window: 16   # Max boundaries the LLM can return per window
+    overlap_pct: 0.05               # Overlap between adjacent windows (5%)
   execution:
     parallel_calls: 1               # Parallel lightweight LLM calls (set 1 for chunky/local runs)

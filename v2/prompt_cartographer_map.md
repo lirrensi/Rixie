@@ -12,6 +12,7 @@ Given ordered block mini-summaries, design optimal chapters by grouping semantic
 
 # Constraints
 - Never reorder blocks or create gaps.
+- Use ONLY block IDs that appear in the input below. Do NOT infer, interpolate, or guess block IDs from numbering patterns — every block_start/block_end MUST be an ID you actually see in the provided summaries.
 - Return strict JSON only, no markdown fences, no prose outside JSON.
 - If input contains no useful blocks, return an empty chapters array.
 - Design for downstream LLM constant-output-density constraints — your chapters directly affect extraction quality.

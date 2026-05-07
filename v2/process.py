@@ -120,6 +120,10 @@ def prepare_workspace(
     overview_profile: dict | None = None,
     parallel_calls: int = 8,
     max_blocks: int | None = None,
+    # Step 0: precise LLM boundary detection
+    window_tokens: int = 8000,
+    max_boundaries_per_window: int = 16,
+    overlap_pct: float = 0.05,
 ) -> tuple[Path, Path, Path]:
     slug = slugify(source_path.name if source_path else "book")
     workspace_dir = books_dir / slug
@@ -158,8 +162,10 @@ def prepare_workspace(
 
     cartography_stage = artifact.stages["cartography"]
     if not artifact.blocks:
-        print("   [2/6] Building block map...")
-        print(f"   → Target {target_tokens} tokens, min {min_tokens}, max {max_tokens}")
+        print("   [2/6] Building block map (Step 0: precise LLM boundary detection)...")
+        print(f"   → ~{window_tokens} token windows, "
+              f"max {max_boundaries_per_window} boundaries/window, "
+              f"{overlap_pct:.0%} overlap")
         artifact = map_book_structure(
             artifact,
             source_text,
@@ -167,6 +173,10 @@ def prepare_workspace(
             min_tokens=min_tokens,
             max_tokens=max_tokens,
             encoding_model=encoding_model,
+            llm_settings=mini_summary_settings,
+            window_tokens=window_tokens,
+            max_boundaries_per_window=max_boundaries_per_window,
+            overlap_pct=overlap_pct,
         )
         print(f"   ✅ Created {len(artifact.blocks)} blocks")
         if max_blocks is not None and max_blocks > 0:
@@ -354,6 +364,10 @@ def main(argv: list[str] | None = None) -> int:
                 overview_profile=overview_profile,
                 parallel_calls=int(execution.get("parallel_calls", 8)),
                 max_blocks=args.max_blocks or None,
+                # Step 0: precise LLM boundary detection
+                window_tokens=int(blocking.get("window_tokens", 8000)),
+                max_boundaries_per_window=int(blocking.get("max_boundaries_per_window", 16)),
+                overlap_pct=float(blocking.get("overlap_pct", 0.05)),
             )
 
             print(f"✅ V2 workspace ready: {workspace_dir}")
