@@ -23,6 +23,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from v2.cartographer import LLMSettings, generate_block_mini_summaries, group_blocks_into_chapters, map_book_structure
+from v2.checkpoint import save_artifact_sync
 from v2.config import load_repo_config, load_v2_config, resolve_profile
 from v2.export_epub import export_epub
 from v2.ingest import detect_format, ingest_source
@@ -96,10 +97,7 @@ def save_artifact(artifact: BookArtifact, source_text: str, workspace_dir: Path)
     source_md_path = workspace_dir / artifact.metadata.source_md
     book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
     source_md_path.write_text(source_text, encoding="utf-8")
-    book_yaml_path.write_text(
-        yaml.safe_dump(artifact.model_dump(mode="json"), sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    save_artifact_sync(artifact, book_yaml_path)
     return source_md_path, book_yaml_path
 
 
@@ -242,6 +240,7 @@ def prepare_workspace(
         print("   [6/6] Building abstract...")
         artifact = synthesize_overview(
             artifact,
+            workspace_dir,
             ultra_dense_settings=ultra_dense_settings,
             prompt_file=str(overview_profile.get("prompt_file", "prompt_ultra_dense.md")),
         )

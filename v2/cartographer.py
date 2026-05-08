@@ -130,10 +130,12 @@ def generate_block_mini_summaries(
     total = len(artifact.blocks)
     print(f"   🔍 Mini summaries: {total} block(s)", flush=True)
 
-    # Skip blocks that already have mini_summaries
+    # A block is "done" if mini_summary is not None. Period.
+    # useful=False blocks get mini_summary="N/A" stamped on completion.
+    # No need to check useful — only "was this block processed?" matters.
     pending_indices = [
         idx for idx, block in enumerate(artifact.blocks)
-        if block.mini_summary is None or block.useful is None
+        if block.mini_summary is None
     ]
 
     if not pending_indices:
@@ -169,8 +171,9 @@ def generate_block_mini_summaries(
                 )
 
                 # Update artifact in memory
-                artifact.blocks[idx].mini_summary = result.mini_summary
                 artifact.blocks[idx].useful = result.useful
+                # Always stamp mini_summary so "processed?" is just "is not None"
+                artifact.blocks[idx].mini_summary = result.mini_summary or "N/A"
                 success = True
 
                 # Throttled checkpoint save (not every block — every N%)
@@ -205,7 +208,11 @@ def generate_block_mini_summaries(
     print(f"   💾 Final save complete ({len(artifact.blocks)} blocks)", flush=True)
 
     useful_blocks = sum(1 for block in artifact.blocks if block.useful)
-    failures = sum(1 for idx, block in enumerate(artifact.blocks) if block.mini_summary is None)
+    # Only useful=True blocks with missing summary count as failures.
+    failures = sum(
+        1 for block in artifact.blocks
+        if block.useful is True and block.mini_summary is None
+    )
 
     if failures:
         stage.status = "partial"
@@ -372,6 +379,8 @@ def group_blocks_into_chapters(
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
     useful_blocks = [block for block in artifact.blocks if block.useful is not False]
+    useful_ids = [block.block_id for block in useful_blocks]  # for feedback/diagnostics
+    useful_ids_set = set(useful_ids)
     print(f"\n{'='*80}")
     print(f"🔍 CARTOGRAPHER START")
     print(f"🔍 Total blocks: {len(artifact.blocks)}")
@@ -448,6 +457,8 @@ def group_blocks_into_chapters(
     feedback = ""
     last_parsed = None
 
+    print(f"\n🆕 Starting cartographer from turn 1/{MAX_TURNS}", flush=True)
+
     for turn in range(1, MAX_TURNS + 1):
         print(f"\n{'─'*60}")
         print(f"🔄 TURN {turn}/{MAX_TURNS}", flush=True)
@@ -496,13 +507,69 @@ def group_blocks_into_chapters(
             break
 
         # ── FAILED ── build feedback for next turn ──
+        # CRITICAL: validation errors use ORIGINAL block IDs, but the LLM
+        # only knows RENUMBERED IDs (block_0001, block_0002, …).  We must
+        # translate the errors into renumbered IDs AND include the block
+        # summaries so the LLM can actually reason about the orphaned blocks.
+        renumbered_errors: list[str] = []
+        for e in errors:
+            translated = e
+            for orig_id, renum_id in renumber_map.items():
+                translated = translated.replace(orig_id, renum_id)
+            renumbered_errors.append(translated)
+
+        # Recompute which blocks are still uncovered from the LLM's attempt
+        covered_check: list[str] = []
+        dup_check: list[str] = []
+        for ch in parsed.chapters:
+            sid_orig = reverse_map.get(ch.block_start, ch.block_start)
+            eid_orig = reverse_map.get(ch.block_end, ch.block_end)
+            if sid_orig in useful_ids_set and eid_orig in useful_ids_set:
+                si = useful_ids.index(sid_orig)
+                ei = useful_ids.index(eid_orig)
+                if ei >= si:
+                    chunk = useful_ids[si:ei + 1]
+                    covered_check.extend(chunk)
+                    dup_check.extend(chunk)
+
+        uncovered_original = [b for b in useful_ids if b not in covered_check]
+        duplicated_original = sorted(set(
+            b for b in dup_check if dup_check.count(b) > 1
+        ))
+
+        by_id_local = {block.block_id: block for block in artifact.blocks}
+
+        def _summarize_missing(bids: list[str], label: str) -> str:
+            lines: list[str] = []
+            for bid in bids[:20]:
+                renum = renumber_map.get(bid)
+                block = by_id_local.get(bid)
+                if renum and block:
+                    summary = block.mini_summary or "[no summary]"
+                    lines.append(f"  {renum}: {summary}")
+                elif renum:
+                    lines.append(f"  {renum}: [no summary]")
+            if not lines:
+                return ""
+            suffix = f"\n  … ({len(bids) - 20} more omitted)" if len(bids) > 20 else ""
+            return f"\n\n⚠️  {label} ({len(bids)} blocks; renumbered IDs + summaries):\n" + "\n".join(lines) + suffix
+
         feedback = (
             f"The chapter map had {len(errors)} validation error(s):\n"
-            + "\n".join(f"  • {e}" for e in errors)
+            + "\n".join(f"  • {e}" for e in renumbered_errors)
         )
+        feedback += _summarize_missing(uncovered_original, "THESE BLOCKS STILL NEED CHAPTERS")
+        feedback += _summarize_missing(duplicated_original, "THESE BLOCKS APPEAR IN MULTIPLE CHAPTERS (duplicates)")
+        if uncovered_original or duplicated_original:
+            feedback += "\n\nMake sure EVERY block appears in exactly ONE chapter. No gaps, no overlaps."
+
         print(f"\n❌ VALIDATION FAILED (turn {turn}):", flush=True)
         for e in errors:
             print(f"   • {e}", flush=True)
+        if uncovered_original:
+            print(f"   Uncovered blocks: {len(uncovered_original)} remaining", flush=True)
+        if duplicated_original:
+            print(f"   Duplicated blocks: {len(duplicated_original)}", flush=True)
 
         if turn == MAX_TURNS:
             raise RuntimeError(

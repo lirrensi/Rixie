@@ -4,13 +4,11 @@
 # EXPORTS: summarize_chapters, synthesize_overview.
 # DOCS: v2/process.py, v2/schema.py
 #
-# POLICY: Every LLM call must succeed. If retries are exhausted and a call
-# still fails, the exception propagates — the entire book is skipped.
-# No partial output is ever produced.
+# POLICY: If data exists on disk, skip it. Never redo a successful LLM call.
+# The only check is: is the field not None? → skip. Same as blocks.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from v2.cartographer import LLMSettings
@@ -81,40 +79,68 @@ def summarize_chapters(
     stage.notes = "Generating separate short and detailed summaries for each mapped chapter."
 
     chapter_count = len(artifact.chapters)
-    print(f"   ✍️ Chapter summaries: {chapter_count} chapter(s) - SEQUENTIAL", flush=True)
+    total = chapter_count
+    print(f"   ✍️  Chapter summaries: {total} chapter(s) - SEQUENTIAL", flush=True)
 
-    chapter_payloads = [
-        (idx, chapter.title, _chapter_source_text(artifact, chapter.blocks))
-        for idx, chapter in enumerate(artifact.chapters)
-    ]
-    total = len(chapter_payloads)
+    book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
 
     # ---- SHORT SUMMARIES ----
-    book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
-    save_artifact_sync(artifact, book_yaml_path)  # initial state
+    # Skip chapters that already have a short_summary (not None)
+    short_pending = [
+        idx for idx, ch in enumerate(artifact.chapters)
+        if ch.short_summary is None
+    ]
+    print(f"   short_summary: {total - len(short_pending)}/{total} already done, {len(short_pending)} pending", flush=True)
 
-    short_ck = CheckpointTracker(total, every_pct=checkpoint_pct)
-    for idx, title, text in chapter_payloads:
-        print(f"   📤 Short sent: {title}", flush=True)
-        artifact.chapters[idx].short_summary = _summarize_short_sync(
-            title, text, short_settings, short_prompt_file
-        )
-        if short_ck.should_save():
-            save_artifact_sync(artifact, book_yaml_path)
-            print(f"   💾 Checkpoint save short: {short_ck.progress_pct:.0f}%", flush=True)
-        print(f"   ✅ Short done: {title}", flush=True)
+    if short_pending:
+        short_ck = CheckpointTracker(len(short_pending), every_pct=checkpoint_pct)
+        for idx in short_pending:
+            chapter = artifact.chapters[idx]
+            title = chapter.title
+            text = _chapter_source_text(artifact, chapter.blocks)
+            print(f"   📤 Short sent: {title}", flush=True)
+            artifact.chapters[idx].short_summary = _summarize_short_sync(
+                title, text, short_settings, short_prompt_file
+            )
+            if short_ck.should_save():
+                save_artifact_sync(artifact, book_yaml_path)
+                print(f"   💾 Checkpoint save short: {short_ck.progress_pct:.0f}%", flush=True)
+            print(f"   ✅ Short done: {title}", flush=True)
+
+        # Final anchor save
+        save_artifact_sync(artifact, book_yaml_path)
+        print(f"   💾 Short summaries final save complete", flush=True)
+    else:
+        print(f"   ✓ All short summaries already present", flush=True)
 
     # ---- DETAILED SUMMARIES ----
-    detailed_ck = CheckpointTracker(total, every_pct=checkpoint_pct)
-    for idx, title, text in chapter_payloads:
-        print(f"   📤 Detail sent: {title}", flush=True)
-        artifact.chapters[idx].detailed_summary = _summarize_detailed_sync(
-            title, text, detailed_settings, detailed_prompt_file
-        )
-        if detailed_ck.should_save():
-            save_artifact_sync(artifact, book_yaml_path)
-            print(f"   💾 Checkpoint save detailed: {detailed_ck.progress_pct:.0f}%", flush=True)
-        print(f"   ✅ Detail done: {title}", flush=True)
+    # Skip chapters that already have a detailed_summary (not None)
+    detailed_pending = [
+        idx for idx, ch in enumerate(artifact.chapters)
+        if ch.detailed_summary is None
+    ]
+    print(f"   detailed_summary: {total - len(detailed_pending)}/{total} already done, {len(detailed_pending)} pending", flush=True)
+
+    if detailed_pending:
+        detailed_ck = CheckpointTracker(len(detailed_pending), every_pct=checkpoint_pct)
+        for idx in detailed_pending:
+            chapter = artifact.chapters[idx]
+            title = chapter.title
+            text = _chapter_source_text(artifact, chapter.blocks)
+            print(f"   📤 Detail sent: {title}", flush=True)
+            artifact.chapters[idx].detailed_summary = _summarize_detailed_sync(
+                title, text, detailed_settings, detailed_prompt_file
+            )
+            if detailed_ck.should_save():
+                save_artifact_sync(artifact, book_yaml_path)
+                print(f"   💾 Checkpoint save detailed: {detailed_ck.progress_pct:.0f}%", flush=True)
+            print(f"   ✅ Detail done: {title}", flush=True)
+
+        # Final anchor save
+        save_artifact_sync(artifact, book_yaml_path)
+        print(f"   💾 Detailed summaries final save complete", flush=True)
+    else:
+        print(f"   ✓ All detailed summaries already present", flush=True)
 
     # ---- REPORT ----
     stage.status = "done"
@@ -132,12 +158,21 @@ def summarize_chapters(
 
 def synthesize_overview(
     artifact: BookArtifact,
+    workspace_dir: Path | None = None,
     *,
     ultra_dense_settings: LLMSettings,
     prompt_file: str = "prompt_ultra_dense.md",
 ) -> BookArtifact:
     artifact.stages.setdefault(OVERVIEW_STAGE, StageState(name=OVERVIEW_STAGE))
     stage = artifact.stages[OVERVIEW_STAGE]
+
+    # Already done? Skip entirely.
+    if artifact.overview.ultra_dense_summary is not None:
+        print("   ✓ Abstract already present — skipping", flush=True)
+        stage.status = "done"
+        stage.notes = "Abstract already present."
+        return artifact.touch()
+
     stage.status = "running"
     stage.notes = "Building a top abstract from chapter short summaries."
 
@@ -173,6 +208,13 @@ def synthesize_overview(
         raise RuntimeError("Abstract call returned empty response — cannot produce final output.")
 
     artifact.overview.ultra_dense_summary = result
+
+    # Save immediately — one call, one save
+    if workspace_dir:
+        book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
+        save_artifact_sync(artifact, book_yaml_path)
+        print(f"   💾 Abstract saved", flush=True)
+
     stage.status = "done"
     stage.notes = "Abstract generated successfully."
     print("   ✅ Abstract complete", flush=True)
