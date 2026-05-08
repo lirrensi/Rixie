@@ -22,6 +22,7 @@ if __package__ in {None, ""}:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from v2.budget import ContextBudget
 from v2.cartographer import LLMSettings, generate_block_mini_summaries, group_blocks_into_chapters, map_book_structure
 from v2.checkpoint import save_artifact_sync
 from v2.config import load_repo_config, load_v2_config, resolve_profile
@@ -126,6 +127,8 @@ def prepare_workspace(
     overlap_pct: float = 0.05,
     # Checkpoint throttling
     checkpoint_pct: float = 5.0,
+    # Context budget (None = no splitting)
+    budget: ContextBudget | None = None,
 ) -> tuple[Path, Path, Path]:
     slug = slugify(source_path.name if source_path else "book")
     workspace_dir = books_dir / slug
@@ -199,6 +202,7 @@ def prepare_workspace(
             parallel_calls=1,  # Always 1 - no parallel
             prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
             checkpoint_pct=checkpoint_pct,
+            budget=budget,
         )
         useful = sum(1 for b in artifact.blocks if b.useful)
         print(f"   ✅ Mini summaries done: {useful}/{len(artifact.blocks)} useful")
@@ -213,6 +217,7 @@ def prepare_workspace(
             workspace_dir,
             llm_settings=cartographer_settings,
             prompt_file=str(cartography_profile.get("prompt_file", "prompt_cartographer_map.md")),
+            budget=budget,
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.chapters:
@@ -231,6 +236,7 @@ def prepare_workspace(
             short_prompt_file=str(chapter_short_profile.get("prompt_file", "prompt_chapter_short.md")),
             detailed_prompt_file=str(chapter_long_profile.get("prompt_file", "prompt_chapter_detailed.md")),
             checkpoint_pct=checkpoint_pct,
+            budget=budget,
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["chapter_summaries"].status == "done":
@@ -243,6 +249,7 @@ def prepare_workspace(
             workspace_dir,
             ultra_dense_settings=ultra_dense_settings,
             prompt_file=str(overview_profile.get("prompt_file", "prompt_ultra_dense.md")),
+            budget=budget,
         )
         source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
     elif artifact.stages["overview"].status == "done":
@@ -365,6 +372,16 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"📚 Found {len(books)} V2 book(s) to process")
 
+    # Build context budget from execution config
+    budget = ContextBudget(
+        context_window=int(execution.get("context_window", 128000)),
+        prompt_overhead=int(execution.get("prompt_overhead", 4000)),
+        response_reserve=int(execution.get("response_reserve", 8000)),
+        encoding_model=str(blocking.get("encoding_model", "gpt-4o-mini")),
+    )
+    print(f"   📐 Context budget: window={budget.context_window}, "
+          f"usable={budget.usable} tokens per call")
+
     success = 0
     failed = 0
     for source_path in books:
@@ -393,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_boundaries_per_window=int(blocking.get("max_boundaries_per_window", 16)),
                 overlap_pct=float(blocking.get("overlap_pct", 0.05)),
                 checkpoint_pct=float(execution.get("checkpoint_pct", 5.0)),
+                budget=budget,
             )
 
             print(f"✅ V2 workspace ready: {workspace_dir}")

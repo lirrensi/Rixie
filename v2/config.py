@@ -70,6 +70,10 @@ DEFAULT_V2_CONFIG: dict = {
         },
         "execution": {
             "parallel_calls": 8,
+            "context_window": 128000,
+            "prompt_overhead": 4000,
+            "response_reserve": 8000,
+
         },
     }
 }

@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
     tiktoken = None
 
 from v2.blocker import build_blocks
+from v2.budget import ContextBudget, estimate_tokens, split_text_by_tokens
 from v2.checkpoint import CheckpointTracker, save_artifact_sync
 from v2.pipeline import structured_completion
 from v2.prompts import load_prompt
@@ -63,8 +64,7 @@ class MiniSummaryResult(BaseModel):
 
 class ChapterRange(BaseModel):
     title: str
-    block_start: str
-    block_end: str
+    end_idx: int  # 1-based index of the LAST block in this chapter
 
 
 class ChapterMapResult(BaseModel):
@@ -100,6 +100,77 @@ def _call_json_sync(
     return structured_completion(settings, messages, response_model)
 
 
+def _split_oversized_block_for_mini_summary(
+    block: BlockArtifact,
+    *,
+    budget: ContextBudget,
+    llm_settings: LLMSettings,
+    prompt_file: str,
+    max_retries: int = 3,
+) -> str | None:
+    """Generate a mini-summary for an oversized block by splitting it into parts.
+    
+    Each part gets its own mini-summary call; results are combined into one.
+    Returns combined mini_summary or raises on failure.
+    """
+    system = load_prompt(prompt_file)
+    system_tokens = estimate_tokens(system, llm_settings.model)
+    available = budget.usable - system_tokens
+
+    if available <= 0:
+        return None
+
+    parts = split_text_by_tokens(
+        block.text or "",
+        max_tokens=available,
+        model=llm_settings.model,
+    )
+
+    if len(parts) <= 1:
+        # Single part — let the normal retry loop handle it
+        return None
+
+    print(f"   ✂️  Block {block.block_id} split into {len(parts)} part(s) "
+          f"(~{estimate_tokens(block.text or '', llm_settings.model)} tokens, "
+          f"budget {available})", flush=True)
+
+    mini_summaries: list[str] = []
+    for part_idx, part_text in enumerate(parts, start=1):
+        success = False
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = _call_json_sync(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": f"BLOCK PART {part_idx}:\\n{part_text}"},
+                    ],
+                    llm_settings,
+                    response_model=MiniSummaryResult,
+                )
+                if result.useful and result.mini_summary:
+                    mini_summaries.append(f"[Part {part_idx}] {result.mini_summary}")
+                elif result.useful:
+                    mini_summaries.append(f"[Part {part_idx}] (content area)")
+                success = True
+                break
+            except Exception as e:
+                last_error = e
+                import time as time_mod
+                if attempt < max_retries:
+                    time_mod.sleep(2 ** attempt)
+
+        if not success:
+            raise RuntimeError(
+                f"Block {block.block_id} part {part_idx} failed "
+                f"after {max_retries} retries: {last_error}"
+            )
+
+    combined = " | ".join(mini_summaries)
+    return combined
+
+
 def generate_block_mini_summaries(
     artifact: BookArtifact,
     workspace_dir: Path,
@@ -109,6 +180,7 @@ def generate_block_mini_summaries(
     prompt_file: str = "prompt_block_mini_summary.md",
     checkpoint_pct: float = 5.0,
     max_per_block_retries: int = 3,
+    budget: ContextBudget | None = None,
 ) -> BookArtifact:
     """Generate mini summaries SEQUENTIALLY with per-block retry and checkpoint saves.
 
@@ -155,6 +227,34 @@ def generate_block_mini_summaries(
     for idx in pending_indices:
         block = artifact.blocks[idx]
         print(f"   📤 Processing {idx+1}/{total}: {block.block_id}", flush=True)
+
+        # ── Check if this block is too large for a single mini-summary call ──
+        if budget is not None:
+            system_text = load_prompt(prompt_file)
+            system_tok = estimate_tokens(system_text, llm_settings.model)
+            block_tok = estimate_tokens(block.text or "", llm_settings.model)
+            total_est = system_tok + block_tok + 50  # 50 for "BLOCK:\\n" overhead
+            if total_est > budget.usable:
+                combined = _split_oversized_block_for_mini_summary(
+                    block,
+                    budget=budget,
+                    llm_settings=llm_settings,
+                    prompt_file=prompt_file,
+                    max_retries=max_per_block_retries,
+                )
+                if combined is not None:
+                    artifact.blocks[idx].useful = True
+                    artifact.blocks[idx].mini_summary = combined
+
+                    if checkpoint.should_save():
+                        save_artifact_sync(artifact, book_yaml_path)
+                        print(f"   💾 Checkpoint save at {checkpoint.progress_pct:.0f}% ({idx+1}/{total})", flush=True)
+
+                    print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → split into parts, useful=True", flush=True)
+                    continue
+                else:
+                    # Fall through to normal processing (the split couldn't determine a budget)
+                    print(f"   ↻ Block {block.block_id} oversized but can't split — trying normal call", flush=True)
 
         success = False
         last_error: Exception | None = None
@@ -234,101 +334,58 @@ def generate_block_mini_summaries(
     return artifact.touch()
 
 
-def _snap_to_useful(
-    block_id: str,
-    *,
-    useful_ids: list[str],
-    by_id: dict[str, BlockArtifact],
-    direction: str,  # "forward" or "backward"
-) -> str | None:
-    """Snap a block_id to the nearest useful block in the given direction.
-
-    When the LLM returns a chapter boundary that references a non-useful
-    block (e.g. useful=False), this walks forward/backward through the
-    useful_ids list to find the nearest valid anchor.
-    """
-    if block_id in set(useful_ids):
-        return block_id
-
-    target_order = by_id[block_id].order
-
-    if direction == "backward":
-        # Walk backward: find the last useful block with order <= target_order
-        best: str | None = None
-        for uid in useful_ids:
-            if by_id[uid].order <= target_order:
-                best = uid
-            else:
-                break
-        return best
-
-    # direction == "forward"
-    for uid in useful_ids:
-        if by_id[uid].order >= target_order:
-            return uid
-    return None
-
-
-def _validate_and_materialize_chapters(
-    artifact: BookArtifact,
+def _validate_and_materialize_chapter_indices(
     chapter_ranges: list[ChapterRange],
+    useful_blocks: list[BlockArtifact],
 ) -> tuple[list[ChapterArtifact], list[str]]:
-    """Validate and materialize chapter ranges.
+    """Validate chapter ranges using consecutive end-index logic.
+
+    Chapters are *structurally consecutive*: given a list of ``end_idx`` values,
+    Chapter 1 covers ``useful_blocks[0:end_idx_1]``, Chapter 2 covers
+    ``useful_blocks[end_idx_1:end_idx_2]``, and so on.  Gaps and overlaps
+    are *structurally impossible* — the only thing that can go wrong is the
+    LLM producing out-of-order or out-of-range end indices.
 
     Returns:
         (chapters, []) on success — every useful block appears exactly once.
-        ([], errors) on failure — errors explain gaps and overlaps for LLM feedback.
+        ([], errors) on failure — errors describe what needs fixing.
     """
-    by_id = {block.block_id: block for block in artifact.blocks}
-    useful_ids = [block.block_id for block in artifact.blocks if block.useful is not False]
-    if not useful_ids:
+    N = len(useful_blocks)
+    if N == 0:
         return [], []
 
     errors: list[str] = []
     chapters: list[ChapterArtifact] = []
-    covered: list[str] = []
+    prev_end = 0  # 0-based index of the last block in the previous chapter
 
-    for order, chapter in enumerate(chapter_ranges, start=1):
-        if chapter.block_start not in by_id or chapter.block_end not in by_id:
+    for order, ch_range in enumerate(chapter_ranges, start=1):
+        end_idx = ch_range.end_idx
+
+        if end_idx <= prev_end:
             errors.append(
-                f"Unknown block ID in chapter '{chapter.title}': "
-                f"{chapter.block_start} or {chapter.block_end} does not exist"
+                f"Chapter {order} ('{ch_range.title}'): end_idx={end_idx} is not after "
+                f"previous chapter's end ({prev_end}).  Each chapter needs >= 1 block."
             )
             continue
 
-        # Snap boundaries to nearest useful blocks (defense-in-depth;
-        # with renumbering the LLM should never reference non-useful blocks)
-        start_id = _snap_to_useful(
-            chapter.block_start, useful_ids=useful_ids, by_id=by_id, direction="forward"
-        )
-        end_id = _snap_to_useful(
-            chapter.block_end, useful_ids=useful_ids, by_id=by_id, direction="backward"
-        )
-
-        if start_id is None or end_id is None:
+        if end_idx > N:
             errors.append(
-                f"Chapter '{chapter.title}': could not resolve boundary "
-                f"({chapter.block_start} or {chapter.block_end}) to a useful block"
+                f"Chapter {order} ('{ch_range.title}'): end_idx={end_idx} exceeds "
+                f"total block count ({N})."
             )
             continue
 
-        start_idx = useful_ids.index(start_id)
-        end_idx = useful_ids.index(end_id)
-        if end_idx < start_idx:
-            errors.append(
-                f"Chapter '{chapter.title}': end block ({end_id}) comes before start block ({start_id})"
-            )
-            continue
+        # Materialize this chapter's blocks
+        range_blocks = useful_blocks[prev_end:end_idx]
+        block_ids = [b.block_id for b in range_blocks]
+        start_block = range_blocks[0]
+        end_block = range_blocks[-1]
 
-        block_ids = useful_ids[start_idx : end_idx + 1]
-        covered.extend(block_ids)
-        start_block = by_id[block_ids[0]]
-        end_block = by_id[block_ids[-1]]
         chapters.append(
             ChapterArtifact(
                 chapter_id=f"chapter_{order:03d}",
                 order=order,
-                title=" ".join(chapter.title.split()) or f"Chapter {order}",
+                title=ch_range.title.strip() or f"Chapter {order}",
                 block_start=start_block.order,
                 block_end=end_block.order,
                 char_start=start_block.char_start,
@@ -336,32 +393,132 @@ def _validate_and_materialize_chapters(
                 blocks=block_ids,
             )
         )
+        prev_end = end_idx
 
-    # Check for gaps: useful blocks not covered by any chapter
-    uncovered = [b for b in useful_ids if b not in covered]
-    if uncovered:
-        preview = uncovered[:5]
+    # Did we cover all N blocks?
+    if prev_end < N:
         errors.append(
-            f"GAP: {len(uncovered)} useful block(s) are not covered by any chapter. "
-            f"Missing: {preview}{'...' if len(uncovered) > 5 else ''}. "
-            f"Every block must appear in exactly one chapter."
+            f"GAP: Only {prev_end} of {N} blocks are covered. "
+            f"The last chapter must end at index {N} to include all blocks "
+            f"(currently ends at {prev_end})."
         )
-
-    # Check for overlaps: blocks appearing in multiple chapters
-    if len(covered) != len(set(covered)):
-        from collections import Counter
-        dupes = sorted(bid for bid, count in Counter(covered).items() if count > 1)
-        preview = dupes[:5]
+    elif prev_end > N:
         errors.append(
-            f"OVERLAP: {len(dupes)} block(s) appear in multiple chapters. "
-            f"Duplicated: {preview}{'...' if len(dupes) > 5 else ''}. "
-            f"Each block must belong to exactly one chapter."
+            f"OVERFLOW: Chapter ranges cover {prev_end} blocks but only {N} exist."
         )
 
     if errors:
         return [], errors
-
     return chapters, []
+
+
+def _run_cartography_on_blocks(
+    artifact: BookArtifact,
+    useful_blocks: list[BlockArtifact],
+    *,
+    llm_settings: LLMSettings,
+    prompt_file: str,
+    part_label: str = "",
+) -> list[ChapterArtifact]:
+    """Run the multi-turn cartography loop on a list of useful blocks.
+
+    Blocks are presented as **numbered indices** (1, 2, 3, …) — NOT block IDs.
+    The LLM outputs only ``end_idx`` (the index of each chapter's last block).
+    Chapters are structurally consecutive, making gaps/overlaps impossible.
+
+    Args:
+        artifact: Full artifact (unused directly — kept for API compatibility).
+        useful_blocks: The blocks to map into chapters.
+        llm_settings: LLM configuration.
+        prompt_file: Path to the system prompt file.
+        part_label: If non-empty, prepended to chapter titles (e.g. "Part 1 — ").
+
+    Returns:
+        List of ChapterArtifact objects with ORIGINAL block IDs.
+    """
+    # Present blocks as simple numbered indices: "1: summary\n2: summary\n..."
+    block_lines = [
+        f"{idx}: {block.mini_summary or ''}"
+        for idx, block in enumerate(useful_blocks, start=1)
+    ]
+
+    system = load_prompt(prompt_file)
+    base_user = "ORDERED BLOCK SUMMARIES (each line has an index number):\\n" + "\\n".join(block_lines)
+
+    MAX_TURNS = 6
+    feedback = ""
+
+    for turn in range(1, MAX_TURNS + 1):
+        if feedback:
+            user = (
+                base_user
+                + "\n\n---\n❌ YOUR PREVIOUS CHAPTER MAP WAS REJECTED:\n"
+                + feedback
+                + "\n---\nPlease fix ALL of the issues above and return a corrected chapter map with end_idx values."
+            )
+        else:
+            user = base_user
+
+        parsed = _call_json_sync(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            llm_settings,
+            response_model=ChapterMapResult,
+        )
+
+        # Validate using consecutive index logic
+        validated_chapters, errors = _validate_and_materialize_chapter_indices(
+            parsed.chapters, useful_blocks,
+        )
+
+        if not errors:
+            if part_label:
+                for ch in validated_chapters:
+                    ch.title = f"{part_label}{ch.title}"
+            return validated_chapters
+
+        # ── BUILD FEEDBACK ──
+        # With consecutive-range logic, errors are simple:
+        #   - "end_idx not after previous"
+        #   - "end_idx exceeds N"
+        #   - "last chapter doesn't end at N"
+        error_lines = "\n".join(f"  • {e}" for e in errors)
+
+        # Show the current state so the LLM can reason about what to fix
+        current_state = "\n".join(
+            f"  Chapter {i+1}: end_idx={ch.end_idx} ({ch.title})"
+            for i, ch in enumerate(parsed.chapters)
+        )
+
+        feedback = (
+            f"The chapter map had {len(errors)} validation error(s):\n"
+            f"{error_lines}\n\n"
+            f"Current chapter end indices:\n{current_state}\n\n"
+            f"Remember:\n"
+            f"- There are {len(useful_blocks)} blocks total (indices 1–{len(useful_blocks)})\n"
+            f"- Chapters are consecutive: Ch 1 covers indices 1..end_1, Ch 2 covers end_1+1..end_2\n"
+            f"- end_idx values must be STRICTLY INCREASING (each larger than the last)\n"
+            f"- The last chapter MUST end at index {len(useful_blocks)}"
+        )
+
+        print(f"\n❌ VALIDATION FAILED (turn {turn}):", flush=True)
+        for e in errors:
+            print(f"   • {e}", flush=True)
+
+        if turn == MAX_TURNS:
+            raise RuntimeError(
+                f"Cartographer failed after {MAX_TURNS} turns. "
+                f"Last validation errors:\n{feedback}"
+            )
+
+        print(f"   🔁 Feeding errors back to LLM for turn {turn + 1}...", flush=True)
+
+    raise RuntimeError(
+        f"Cartographer failed after {MAX_TURNS} turns — "
+        f"no valid chapter map produced."
+    )
 
 
 def group_blocks_into_chapters(
@@ -370,21 +527,31 @@ def group_blocks_into_chapters(
     *,
     llm_settings: LLMSettings,
     prompt_file: str = "prompt_cartographer_map.md",
+    budget: ContextBudget | None = None,
 ) -> BookArtifact:
-    """Group blocks into chapters - SYNCHRONOUS.
+    """Group blocks into chapters using consecutive-range cartography.
+
+    Blocks are presented as numbered indices (1, 2, 3, …).  The LLM only
+    outputs ``end_idx`` for each chapter — the index of its LAST block.
+    Chapters are *structurally consecutive*, which makes gaps and overlaps
+    impossible at the schema level.
+
+    If the block summaries exceed the context budget, blocks are split
+    into evenly-sized chunks and cartography runs separately on each chunk.
+    Chapter titles get ``"Part N — "`` prepended in split mode.
 
     Any failure after all retries is a hard stop — the exception propagates
-    to the caller so the book is skipped entirely (no partial output).
+    so the book is skipped entirely.
     """
     stage = artifact.stages[CARTOGRAPHY_STAGE]
     stage.status = "running"
     useful_blocks = [block for block in artifact.blocks if block.useful is not False]
-    useful_ids = [block.block_id for block in useful_blocks]  # for feedback/diagnostics
-    useful_ids_set = set(useful_ids)
     print(f"\n{'='*80}")
     print(f"🔍 CARTOGRAPHER START")
     print(f"🔍 Total blocks: {len(artifact.blocks)}")
     print(f"🔍 Useful blocks: {len(useful_blocks)}")
+    if budget:
+        print(f"🔍 Context budget: {budget}")
     print(f"{'='*80}\n")
 
     if not useful_blocks:
@@ -405,188 +572,84 @@ def group_blocks_into_chapters(
         print(f"    Token est: {block.token_estimate}")
         print(f"    ---")
 
-    print("\n📋 BUILDING BLOCK LINES FOR LLM:\n")
-    # Renumber blocks sequentially so the LLM sees a gapless sequence.
-    # Without this, gaps from discarded non-useful blocks let the LLM
-    # infer missing IDs (e.g. "block_0090") and hallucinate boundaries.
-    renumber_map: dict[str, str] = {}   # original_id → sequential_id
-    reverse_map: dict[str, str] = {}    # sequential_id → original_id
-    for new_idx, block in enumerate(useful_blocks, start=1):
-        new_id = f"block_{new_idx:04d}"
-        renumber_map[block.block_id] = new_id
-        reverse_map[new_id] = block.block_id
-
-    block_lines = []
-    for block in useful_blocks:
-        new_id = renumber_map[block.block_id]
-        summary = block.mini_summary or ""
-        line = f"{new_id}: {summary}"
-        print(f"  {line}")
-        block_lines.append(line)
-
-    print(f"\n👤 Loading system prompt from: {prompt_file}", flush=True)
-    sys.stdout.flush()
     system = load_prompt(prompt_file)
-    print(f"📄 System prompt length: {len(system)} chars")
-    print(f"\n{'='*80}")
-    print(f"📄 SYSTEM PROMPT FULL TEXT:")
-    print(f"{'='*80}")
-    print(system)
-    print(f"{'='*80}\n")
+    system_tokens = estimate_tokens(system, llm_settings.model)
 
-    user = "ORDERED BLOCK SUMMARIES:\\n" + "\\n".join(block_lines)
-    print(f"📝 User message length: {len(user)} chars")
-    print(f"📊 Block count in user message: {len(block_lines)}")
+    n_blocks = len(useful_blocks)
 
-    print(f"\n{'='*80}")
-    print(f"📝 USER MESSAGE FULL TEXT:")
-    print(f"{'='*80}")
-    print(user)
-    print(f"{'='*80}\n")
+    # Estimate tokens for the numbered block lines
+    def _block_line_tokens(block: BlockArtifact) -> int:
+        summary = block.mini_summary or ""
+        return estimate_tokens(f"   XXXX: {summary}\n", llm_settings.model)
 
-    print(f"\n🤖 Multi-turn cartography: up to 6 turns with validation feedback", flush=True)
-    print(f"🔧 LLM settings:")
-    print(f"    model: {llm_settings.model}")
-    print(f"    temperature: {llm_settings.temperature}")
-    print(f"    thinking: {llm_settings.thinking}")
-    print(f"    api_base: {llm_settings.api_base}")
-    sys.stdout.flush()
+    total_block_tokens = sum(_block_line_tokens(b) for b in useful_blocks)
+    print(f"\n📊 Token estimation:")
+    print(f"   System prompt: ~{system_tokens} tokens")
+    print(f"   Block summaries: ~{total_block_tokens} tokens")
+    print(f"   Total input: ~{system_tokens + total_block_tokens} tokens", flush=True)
 
-    MAX_TURNS = 6
-    base_user = "ORDERED BLOCK SUMMARIES:\\n" + "\\n".join(block_lines)
-    feedback = ""
-    last_parsed = None
+    # ── CHECK IF SPLITTING IS NEEDED (token budget only) ──
+    if budget is not None:
+        per_call_overhead = estimate_tokens(
+            "\n---\n❌ YOUR PREVIOUS CHAPTER MAP WAS REJECTED:\n...\n---\nPlease fix ALL of the issues above...\n",
+            llm_settings.model,
+        )
+        available_per_chunk = budget.usable - system_tokens - per_call_overhead
+        total_input = system_tokens + total_block_tokens + per_call_overhead
 
-    print(f"\n🆕 Starting cartographer from turn 1/{MAX_TURNS}", flush=True)
+        if total_input > budget.usable and available_per_chunk > 0:
+            num_chunks = max(2, (total_block_tokens + available_per_chunk - 1) // available_per_chunk)
+            print(f"\n   ✂️  ~{total_input} tokens exceeds budget of ~{budget.usable}")
+            print(f"   ✂️  Splitting into {num_chunks} evenly-sized chunk(s)"
+                  f" (~{n_blocks // num_chunks} blocks each)\n")
 
-    for turn in range(1, MAX_TURNS + 1):
-        print(f"\n{'─'*60}")
-        print(f"🔄 TURN {turn}/{MAX_TURNS}", flush=True)
-
-        # Build user message: base summaries + optional validation feedback
-        if feedback:
-            user = (
-                base_user
-                + "\n\n---\n❌ YOUR PREVIOUS CHAPTER MAP WAS REJECTED:\n"
-                + feedback
-                + "\n---\nPlease fix ALL of the issues above and return a corrected chapter map."
-            )
+            chunks: list[list[BlockArtifact]] = []
+            base = n_blocks // num_chunks
+            remainder = n_blocks % num_chunks
+            start = 0
+            for i in range(num_chunks):
+                chunk_size = base + (1 if i < remainder else 0)
+                chunks.append(useful_blocks[start:start + chunk_size])
+                start += chunk_size
         else:
-            user = base_user
+            chunks = [useful_blocks]
+    else:
+        chunks = [useful_blocks]
 
-        print(f"\n🚀 Calling _call_json_sync (turn {turn})...")
-        parsed = _call_json_sync(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            llm_settings,
-            response_model=ChapterMapResult,
+    # ── RUN CARTOGRAPHY ON EACH CHUNK ──
+    all_chapters: list[ChapterArtifact] = []
+    total_chunks = len(chunks)
+
+    for chunk_idx, chunk_blocks in enumerate(chunks, start=1):
+        part_label = f"Part {chunk_idx} — " if total_chunks > 1 else ""
+        if part_label:
+            print(f"\n{'─'*60}")
+            print(f"📦 CARTOGRAPHY CHUNK {chunk_idx}/{total_chunks} "
+                  f"({len(chunk_blocks)} blocks)")
+            print(f"{'─'*60}", flush=True)
+
+        chunk_chapters = _run_cartography_on_blocks(
+            artifact,
+            chunk_blocks,
+            llm_settings=llm_settings,
+            prompt_file=prompt_file,
+            part_label=part_label,
         )
-        last_parsed = parsed
+        all_chapters.extend(chunk_chapters)
 
-        print(f"\n✅ Turn {turn} response: {len(parsed.chapters)} chapter(s)")
-        for i, chapter in enumerate(parsed.chapters):
-            print(f"  Chapter {i+1}: {chapter.title}")
-            print(f"    Start: {chapter.block_start}, End: {chapter.block_end}")
+    # ── ASSIGN GLOBAL CHAPTER ORDER ──
+    for order, chapter in enumerate(all_chapters, start=1):
+        chapter.chapter_id = f"chapter_{order:03d}"
+        chapter.order = order
 
-        # Remap renumbered block IDs back to original artifact block IDs
-        for chapter in parsed.chapters:
-            chapter.block_start = reverse_map.get(chapter.block_start, chapter.block_start)
-            chapter.block_end = reverse_map.get(chapter.block_end, chapter.block_end)
-
-        # Validate
-        validated_chapters, errors = _validate_and_materialize_chapters(artifact, parsed.chapters)
-
-        if not errors:
-            # ── SUCCESS ──
-            print(f"\n✅ VALIDATION PASSED on turn {turn}!")
-            artifact.chapters = validated_chapters
-            stage.status = "done"
-            stage.notes = f"Generated chapter map from ordered mini-summaries (turn {turn}/{MAX_TURNS})."
-            break
-
-        # ── FAILED ── build feedback for next turn ──
-        # CRITICAL: validation errors use ORIGINAL block IDs, but the LLM
-        # only knows RENUMBERED IDs (block_0001, block_0002, …).  We must
-        # translate the errors into renumbered IDs AND include the block
-        # summaries so the LLM can actually reason about the orphaned blocks.
-        renumbered_errors: list[str] = []
-        for e in errors:
-            translated = e
-            for orig_id, renum_id in renumber_map.items():
-                translated = translated.replace(orig_id, renum_id)
-            renumbered_errors.append(translated)
-
-        # Recompute which blocks are still uncovered from the LLM's attempt
-        covered_check: list[str] = []
-        dup_check: list[str] = []
-        for ch in parsed.chapters:
-            sid_orig = reverse_map.get(ch.block_start, ch.block_start)
-            eid_orig = reverse_map.get(ch.block_end, ch.block_end)
-            if sid_orig in useful_ids_set and eid_orig in useful_ids_set:
-                si = useful_ids.index(sid_orig)
-                ei = useful_ids.index(eid_orig)
-                if ei >= si:
-                    chunk = useful_ids[si:ei + 1]
-                    covered_check.extend(chunk)
-                    dup_check.extend(chunk)
-
-        uncovered_original = [b for b in useful_ids if b not in covered_check]
-        duplicated_original = sorted(set(
-            b for b in dup_check if dup_check.count(b) > 1
-        ))
-
-        by_id_local = {block.block_id: block for block in artifact.blocks}
-
-        def _summarize_missing(bids: list[str], label: str) -> str:
-            lines: list[str] = []
-            for bid in bids[:20]:
-                renum = renumber_map.get(bid)
-                block = by_id_local.get(bid)
-                if renum and block:
-                    summary = block.mini_summary or "[no summary]"
-                    lines.append(f"  {renum}: {summary}")
-                elif renum:
-                    lines.append(f"  {renum}: [no summary]")
-            if not lines:
-                return ""
-            suffix = f"\n  … ({len(bids) - 20} more omitted)" if len(bids) > 20 else ""
-            return f"\n\n⚠️  {label} ({len(bids)} blocks; renumbered IDs + summaries):\n" + "\n".join(lines) + suffix
-
-        feedback = (
-            f"The chapter map had {len(errors)} validation error(s):\n"
-            + "\n".join(f"  • {e}" for e in renumbered_errors)
-        )
-        feedback += _summarize_missing(uncovered_original, "THESE BLOCKS STILL NEED CHAPTERS")
-        feedback += _summarize_missing(duplicated_original, "THESE BLOCKS APPEAR IN MULTIPLE CHAPTERS (duplicates)")
-        if uncovered_original or duplicated_original:
-            feedback += "\n\nMake sure EVERY block appears in exactly ONE chapter. No gaps, no overlaps."
-
-        print(f"\n❌ VALIDATION FAILED (turn {turn}):", flush=True)
-        for e in errors:
-            print(f"   • {e}", flush=True)
-        if uncovered_original:
-            print(f"   Uncovered blocks: {len(uncovered_original)} remaining", flush=True)
-        if duplicated_original:
-            print(f"   Duplicated blocks: {len(duplicated_original)}", flush=True)
-
-        if turn == MAX_TURNS:
-            raise RuntimeError(
-                f"Cartographer failed after {MAX_TURNS} turns. "
-                f"Last validation errors:\n{feedback}"
-            )
-
-        print(f"   🔁 Feeding errors back to LLM for turn {turn + 1}...", flush=True)
-
-    # If we exhausted all turns without success, last_parsed is set but validation failed
-    if not artifact.chapters:
-        raise RuntimeError(
-            f"Cartographer failed after {MAX_TURNS} turns — "
-            f"no valid chapter map produced. Last response had {len(last_parsed.chapters) if last_parsed else 0} chapters."
-        )
-
-    print(f"\n✓ Cartographer mapped {len(artifact.chapters)} chapter(s) in {turn} turn(s)")
+    artifact.chapters = all_chapters
+    stage.status = "done"
+    stage.notes = (
+        f"Generated chapter map from ordered mini-summaries "
+        f"({total_chunks} chunk(s))."
+    )
+    print(f"\n✓ Cartographer mapped {len(all_chapters)} chapter(s) "
+          f"across {total_chunks} chunk(s)")
 
     # SYNC SAVE & VERIFY chapter mapping
     book_yaml_path = workspace_dir / artifact.metadata.artifact_yaml
@@ -604,6 +667,7 @@ def group_blocks_into_chapters(
         **stage.outputs,
         "chapter_count": len(artifact.chapters),
         "useful_blocks": len(useful_blocks),
+        "cartography_chunks": total_chunks,
         "model": llm_settings.model,
     }
     sys.stdout.flush()

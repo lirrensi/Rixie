@@ -90,3 +90,7 @@ v2:
   execution:
     parallel_calls: 1               # Parallel lightweight LLM calls (set 1 for chunky/local runs)
     checkpoint_pct: 5.0              # Save progress every N% of blocks/chapters (0=every step, 100=only at end)
+    context_window: 128000           # Your model's total context window in tokens
+    prompt_overhead: 4000            # Reserve for system prompts + formatting overhead
+    response_reserve: 8000           # Reserve for the LLM's response tokens
+
