@@ -1,7 +1,7 @@
 [project]
-name = "bookconvert"
-version = "0.2.0"
-description = "Add your description here"
+name = "rixie"
+version = "0.3.0"
+description = "LLM-powered book distiller — throw books in, get distilled knowledge out"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,3 +16,20 @@ dependencies = [
     "markdown>=3.4.0",
     "pypdf>=3.0.0",
 ]
+
+[project.scripts]
+rixie = "main:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["v1", "v1.*", "v2", "v2.*"]
+namespaces = false
+
+[tool.setuptools]
+py-modules = ["main", "audiobook", "copy_to_reading_list"]
+
+[tool.uv]
+package = true

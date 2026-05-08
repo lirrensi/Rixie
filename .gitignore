@@ -12,6 +12,8 @@ build/
 dist/
 wheels/
 *.egg-info
+*.egg
+.pytest_cache/
 
 # Virtual environments
 .venv
@@ -22,6 +24,17 @@ wheels/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# IDE junk
+.idea/
+.vscode/
+
+# Secrets
+.env
+.env.*
+
+# Temp files from audio generation
+*_temp_*.mp3
 
 private/
 
