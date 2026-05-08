@@ -50,17 +50,25 @@ class CheckpointTracker:
     checkpoint interval is crossed.  Never misses the final unit (always True
     on the very last one).
     
+    Args:
+        total: Total number of units to process.
+        every_pct: Save every N% of progress (default 5%).
+        min_interval: Minimum units between saves (default 5). Prevents
+            aggressive saving when total is small (e.g. 18 chapters at 5%
+            would save every 1 chapter — min_interval=5 makes it every 5).
+    
     Edge cases:
-      - total <= 1        → save every unit (effectively same as before)
-      - every_pct very low → interval clamped to 1
-      - total large       → predictable interval (e.g. 5% → 20 saves for 400 blocks)
+      - total <= min_interval → save every unit (you're almost done anyway)
+      - every_pct very low → interval still at least min_interval
+      - total large → predictable interval (e.g. 5% → every 25 for 500 blocks)
     """
 
-    def __init__(self, total: int, *, every_pct: float = 5.0):
+    def __init__(self, total: int, *, every_pct: float = 5.0, min_interval: int = 5):
         self.total = max(total, 1)
         self.processed: int = 0
-        # How many units between saves; never less than 1
-        self._interval: int = max(1, round(self.total * every_pct / 100.0))
+        # How many units between saves; never less than min_interval (or 1 for tiny totals)
+        pct_interval = round(self.total * every_pct / 100.0)
+        self._interval: int = max(min_interval, pct_interval) if self.total > min_interval else 1
         self._next_save_at: int = self._interval
 
     @property
