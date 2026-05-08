@@ -11,9 +11,11 @@ Extract the purest, most valuable thing in this chapter — the essence that giv
 - New terminology: concepts that name something previously unnamed.
 - Empirical realities: constraints or evidence that shift the weight of ideas.
 
+# Language
+Detect the language of the source chapter and write the ENTIRE summary in that language. Do not switch languages — not even for transitions, connective phrases, or framing. If the source chapter is in German, the summary is in German. Match the source, always.
+
 # Constraints
 - Output must be flowing prose — no bullet points, no headings, no structure. But split into paragraphs, never a single solid block of text.
-- Write in the same language as the source chapter.
 - Length: 3-minute read maximum. Every sentence must carry weight.
 - Drop: minutiae, anecdotes, stories, examples unless absolutely essential to understanding the core idea.
 - Translate complexity into accessible language. Write for an intelligent reader who is busy — plain, everyday language. If the author took three pages to say one thing, say it in one sentence.

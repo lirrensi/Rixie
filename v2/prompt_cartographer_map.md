@@ -24,6 +24,9 @@ Your chapter map will be validated automatically. If it has gaps (uncovered bloc
 # Stop rules
 If the block sequence is too fragmented for coherent chapters (e.g., no clear semantic clusters), still produce chapter boundaries following time/sequence flow rather than failing.
 
+# Language
+Detect the language of the source block summaries and write ALL chapter titles in that same language. Never switch languages or translate titles to another language. If the source material is in French, the titles are in French. If it's in Japanese, the titles are in Japanese. Match the source, always.
+
 # Output
 JSON matching this schema:
 ```json

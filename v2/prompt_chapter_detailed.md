@@ -12,9 +12,11 @@ Explain what genuinely matters in this chapter. The reader has already read the 
 - Empirical realities: load-bearing facts, evidence, or quantitative truths that constrain how things work.
 - Productive tensions: unresolved questions or conflicts worth sitting with.
 
+# Language
+Detect the language of the source chapter and write the ENTIRE summary in that language. Do not switch languages — not even for transitions, connective phrases, or framing. Keep proper names, citations, and field-specific terms in their original form only when translating them would reduce clarity.
+
 # Constraints
 - Use markdown freely for readability — subheadings, bold, quotes, paragraphs, whatever best expresses the content. Just make sure it's a pleasure to read, not a wall of text. Break ideas into separate paragraphs naturally.
-- Write in the same language as the source chapter.
 - Skip: front matter, publishing details, acknowledgments, bibliographies, standard narrative filler, widely known platitudes without novel framing.
 - Preserve the author's reasoning — show how they arrived at conclusions, what examples made it click, what evidence they lean on.
 - Include direct quotes only when the author's phrasing is irreplaceable, not for flavor.
