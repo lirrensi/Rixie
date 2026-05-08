@@ -252,24 +252,22 @@ def prepare_workspace(
     artifact = render_outputs(artifact, workspace_dir)
     source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
 
-    if artifact.stages["epub"].status != "done":
-        print("   [epub] Writing EPUB...")
-        try:
-            epub_path = export_epub(workspace_dir)
-            artifact.stages["epub"] = StageState(
-                name="epub", status="done",
-                notes=f"Exported {epub_path.name}",
-                outputs={"epub": str(epub_path.name)},
-            )
-        except Exception as e:
-            artifact.stages["epub"] = StageState(
-                name="epub", status="failed",
-                notes=f"EPUB export failed: {e}",
-            )
-            print(f"   ⚠️  EPUB export failed (non-fatal): {e}")
-        source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
-    else:
-        print("   [epub] EPUB skipped (already complete)")
+    # Always regenerate EPUB (like render) — no stale artifact caching
+    print("   [epub] Writing EPUB...")
+    try:
+        epub_path = export_epub(workspace_dir)
+        artifact.stages["epub"] = StageState(
+            name="epub", status="done",
+            notes=f"Exported {epub_path.name}",
+            outputs={"epub": str(epub_path.name)},
+        )
+    except Exception as e:
+        artifact.stages["epub"] = StageState(
+            name="epub", status="failed",
+            notes=f"EPUB export failed: {e}",
+        )
+        print(f"   ⚠️  EPUB export failed (non-fatal): {e}")
+    source_md_path, book_yaml_path = save_artifact(artifact, source_text, workspace_dir)
 
     return workspace_dir, source_md_path, book_yaml_path
 

@@ -1,6 +1,7 @@
 # FILE: v2/export_epub.py
 # PURPOSE: Render a V2 book.yaml into a progressive-disclosure EPUB3 artifact.
 # OWNS: V2 YAML-to-EPUB conversion, chapter assembly with <details> expandables.
+# NOTE: Hardcoded to EPUB 3 (2011!) — <details> is spec-legal there. No more EPUB 2 stone-age.
 # EXPORTS: export_epub, main.
 # DOCS: README.md, v2/process.py, v2/schema.py
 
@@ -8,10 +9,18 @@
 Rixie V2 — EPUB Exporter
 
 Reads a workspace/book.yaml, converts markdown summaries to HTML,
-and produces an EPUB3 file with progressive disclosure:
-  - Title page (book name, author)
-  - Abstract (ultra-dense overview)
-  - For each chapter: short summary (visible) + detailed summary (<details> expandable)
+and produces an EPUB3 file with two-pass progressive disclosure:
+
+  Part 1 — Short Summaries (read-through):
+    Title page → Abstract → Chapter 1 Short → Chapter 2 Short → ...
+    Each short summary ends with a [📖 Read full summary →] link.
+
+  Part 2 — Detailed Summaries (reference):
+    Chapter 1 Long → Chapter 2 Long → ...
+    Each long summary starts with a [← Back to short] link.
+
+  Readers can also jump between sections via the Table of Contents
+  (Short Summaries section / Detailed Summaries section).
 """
 
 from __future__ import annotations
@@ -141,34 +150,6 @@ EPUB_CSS = textwrap.dedent("""\
     }
     tr:nth-child(even) { background: #f9f9f9; }
 
-    /* ── Progressive Disclosure (<details> expandables) ── */
-    details.chapter-detail {
-        margin-top: 1.5em;
-        padding: 0.75em 1em;
-        border: 1px solid #d4cfc0;
-        border-radius: 8px;
-        background: #faf8f3;
-    }
-    details.chapter-detail[open] {
-        background: #f5f3ed;
-    }
-    summary {
-        font-weight: 600;
-        font-size: 1.05em;
-        color: #5048b0;
-        cursor: pointer;
-        padding: 0.25em 0;
-        user-select: none;
-    }
-    summary:hover {
-        color: #d04030;
-    }
-    .detail-body {
-        margin-top: 1em;
-        padding-top: 0.75em;
-        border-top: 1px solid #e0d8cc;
-    }
-
     /* ── Section styling ── */
     .section-header {
         background: linear-gradient(135deg, #d04030 0%, #5048b0 100%);
@@ -190,6 +171,35 @@ EPUB_CSS = textwrap.dedent("""\
         font-style: italic;
     }
 
+    /* ── Cross-links (Short ↔ Long) ── */
+    .nav-links {
+        margin: 1.5em 0;
+        padding: 0.75em;
+        text-align: center;
+    }
+    .forward-link, .back-link {
+        display: inline-block;
+        padding: 0.5em 1.25em;
+        background: #5048b0;
+        color: #ffffff !important;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.95em;
+    }
+    .forward-link:hover, .back-link:hover {
+        background: #d04030;
+    }
+    .section-divider {
+        text-align: center;
+        margin: 2em 0;
+        padding: 1.5em;
+        color: #9999aa;
+        font-style: italic;
+        border-top: 1px solid #ddd;
+        border-bottom: 1px solid #ddd;
+    }
+
     /* ── Chapter navigation ── */
     .chapter-start {
         page-break-before: always;
@@ -202,14 +212,6 @@ EPUB_CSS = textwrap.dedent("""\
         color: #9999aa;
         margin-bottom: 0.5em;
     }
-    .chapter-divider {
-        text-align: center;
-        margin: 2em 0;
-        color: #ccccdd;
-        font-size: 1.2em;
-        letter-spacing: 0.3em;
-    }
-
     /* ── Abstract ── */
     .abstract-box {
         background: #f0ede6;
@@ -310,32 +312,34 @@ def _build_abstract_section(abstract: str) -> str:
     <div class="abstract-box">{abstract_html}</div>"""
 
 
-def _build_chapter_section(chapter: dict[str, Any], index: int) -> str:
-    """Build a single chapter section with short summary and expandable detailed summary."""
+def _build_short_chapter_section(chapter: dict[str, Any], index: int) -> str:
+    """Build a short summary chapter page with a forward link to the long version."""
     ch_title = chapter.get("title") or f"Chapter {index}"
     short = chapter.get("short_summary") or ""
-    detailed = chapter.get("detailed_summary") or ""
-    chapter_id = chapter.get("chapter_id") or f"chapter-{index}"
-
     short_html = _md_to_html(short)
 
-    chapter_body = f"""
+    return f"""
     <div class="chapter-label">Chapter {index}</div>
     <h2>{ch_title}</h2>
-    {short_html}"""
+    {short_html}
+    <div class="nav-links">
+        <a href="long_{index:03d}.xhtml" class="forward-link">📖 Read full summary →</a>
+    </div>"""
 
-    if detailed.strip():
-        detailed_html = _md_to_html(detailed)
-        chapter_body += f"""
-    <details class="chapter-detail">
-        <summary>📖 Detailed Summary</summary>
-        <div class="detail-body">{detailed_html}</div>
-    </details>"""
 
-    if index > 1:
-        chapter_body += '<div class="chapter-divider">⁂</div>'
+def _build_long_chapter_section(chapter: dict[str, Any], index: int) -> str:
+    """Build a detailed summary chapter page with a back link to the short version."""
+    ch_title = chapter.get("title") or f"Chapter {index}"
+    detailed = chapter.get("detailed_summary") or ""
+    detailed_html = _md_to_html(detailed)
 
-    return chapter_body
+    return f"""
+    <div class="chapter-label">Chapter {index} — Detailed Summary</div>
+    <h2>{ch_title}</h2>
+    <div class="nav-links">
+        <a href="short_{index:03d}.xhtml" class="back-link">← Back to short summary</a>
+    </div>
+    {detailed_html}"""
 
 
 def _build_end_page(book_name: str, chapter_count: int) -> str:
@@ -351,13 +355,12 @@ def _build_end_page(book_name: str, chapter_count: int) -> str:
 
 
 def export_epub(workspace_dir: Path) -> Path:
-    """Export a V2 book.yaml workspace as an EPUB3 file.
+    """Export a V2 book.yaml workspace as an EPUB3 file with two-pass navigation.
 
-    Reads workspace/book.yaml, assembles an EPUB with:
-      1. Title page
-      2. Abstract (overview)
-      3. Each chapter: short summary + <details> detailed summary
-      4. End page
+    Structure:
+      Part 1 — Short Summaries (title → abstract → short ch1 → short ch2 → ...)
+      Part 2 — Detailed Summaries (long ch1 → long ch2 → ... → end)
+      Each short → long and long → short via hyperlinks + TOC sections.
 
     Returns the path to the generated .epub file.
     """
@@ -382,9 +385,11 @@ def export_epub(workspace_dir: Path) -> Path:
     print(f"      Authors: {', '.join(authors) if authors else 'Unknown'}")
     print(f"      Chapters: {len(chapters)}")
     print(f"      Abstract: {'✓' if abstract.strip() else '✗ missing'}")
+    print(f"      Mode: Short summaries → linked to detailed summaries")
 
-    # ── Build EPUB ──
+    # ── Build EPUB (V3) ──
     book = epub.EpubBook()
+    book.EPUB_VERSION = 3
     book.set_identifier(f"rixie-v2-{slug}")
     book.set_title(book_name)
     book.set_language(meta.get("language") or "en")
@@ -393,18 +398,18 @@ def export_epub(workspace_dir: Path) -> Path:
     book.add_metadata("DC", "publisher", "Rixie V2")
     book.add_metadata("DC", "date", meta.get("created_at", ""))
 
-    epub_chapters: list[epub.EpubHtml] = []
+    all_spine: list[epub.EpubHtml] = []
 
-    # 1. Title page
+    # ── 1. Title page ──
     title_chapter = _create_epub_chapter(
         title=f"Title — {book_name}",
         content_html=_build_title_page(book_name, authors),
         file_name="title.xhtml",
         book=book,
     )
-    epub_chapters.append(title_chapter)
+    all_spine.append(title_chapter)
 
-    # 2. Abstract (if present)
+    # ── 2. Abstract (if present) ──
     if abstract.strip():
         abstract_chapter = _create_epub_chapter(
             title="Abstract",
@@ -413,30 +418,53 @@ def export_epub(workspace_dir: Path) -> Path:
             book=book,
             chapter_start=True,
         )
-        epub_chapters.append(abstract_chapter)
+        all_spine.append(abstract_chapter)
 
-    # 3. Chapter sections
+    # ── 3. Short summary chapters (Part 1) ──
+    short_chapters: list[epub.EpubHtml] = []
     for i, ch in enumerate(chapters, start=1):
-        ch_file = f"chapter_{i:03d}.xhtml"
         ch_title = ch.get("title") or f"Chapter {i}"
-
-        ch_html = _build_chapter_section(ch, i)
-        # Wrap first chapter in section-header, rest just flow
-        if i == 1 and not abstract.strip():
-            # If no abstract, first chapter gets the intro treatment
-            ch_html = f"""<div class="section-header"><h1>{book_name}</h1><p>Chapter Summaries</p></div>
-            {ch_html}"""
-
-        epub_ch = _create_epub_chapter(
+        short_ch = _create_epub_chapter(
             title=ch_title,
-            content_html=ch_html,
-            file_name=ch_file,
+            content_html=_build_short_chapter_section(ch, i),
+            file_name=f"short_{i:03d}.xhtml",
             book=book,
-            chapter_start=(i > 1 or bool(abstract.strip())),
+            chapter_start=False,
         )
-        epub_chapters.append(epub_ch)
+        short_chapters.append(short_ch)
 
-    # 4. End page
+    all_spine.extend(short_chapters)
+
+    # ── 4. Section divider between shorts and longs ──
+    part_header = _create_epub_chapter(
+        title="Detailed Summaries",
+        content_html="""
+    <div class="section-header">
+        <h1>Detailed Summaries</h1>
+        <p>In-depth breakdowns for each chapter</p>
+    </div>""",
+        file_name="part2.xhtml",
+        book=book,
+        chapter_start=True,
+    )
+    all_spine.append(part_header)
+
+    # ── 5. Long / detailed summary chapters (Part 2) ──
+    long_chapters: list[epub.EpubHtml] = []
+    for i, ch in enumerate(chapters, start=1):
+        ch_title = f"{ch.get('title') or f'Chapter {i}'} — Detailed"
+        long_ch = _create_epub_chapter(
+            title=ch_title,
+            content_html=_build_long_chapter_section(ch, i),
+            file_name=f"long_{i:03d}.xhtml",
+            book=book,
+            chapter_start=True,
+        )
+        long_chapters.append(long_ch)
+
+    all_spine.extend(long_chapters)
+
+    # ── 6. End page ──
     end_chapter = _create_epub_chapter(
         title=f"End — {book_name}",
         content_html=_build_end_page(book_name, len(chapters)),
@@ -444,14 +472,23 @@ def export_epub(workspace_dir: Path) -> Path:
         book=book,
         chapter_start=True,
     )
-    epub_chapters.append(end_chapter)
+    all_spine.append(end_chapter)
 
-    # ── Navigation ──
-    book.toc = epub_chapters
+    # ── Navigation (hierarchical TOC) ──
+    book.toc = [
+        title_chapter,
+        abstract_chapter if abstract.strip() else None,
+        (epub.Section("Short Summaries"), short_chapters),
+        (epub.Section("Detailed Summaries"), long_chapters),
+        end_chapter,
+    ]
+    # Filter out None entries (when abstract is missing)
+    book.toc = [item for item in book.toc if item is not None]
+
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
-    # Cover / default stylesheet
+    # ── Stylesheet ──
     style = epub.EpubItem(
         uid="style_default",
         file_name="style/default.css",
@@ -459,7 +496,7 @@ def export_epub(workspace_dir: Path) -> Path:
         content=EPUB_CSS,
     )
     book.add_item(style)
-    book.spine = ["nav"] + epub_chapters
+    book.spine = ["nav"] + all_spine
 
     # ── Write ──
     epub_filename = f"{slug}.epub"
