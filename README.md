@@ -29,6 +29,17 @@ Rixie comes in two pipelines. V2 is the future. V1 is the stable legacy.
 
 ---
 
+## See It In Action
+
+Want to see what Rixie produces before running it? Here's the output of a full V2 distillation of **The Wealth of Nations** — Adam Smith's 1,000-page economic treatise, compressed into a browsable scrollytelling document:
+
+> **[📄 The Wealth of Nations — Distilled](assets/adam-smith_the-wealth-of-nations.html)** (3.4 MB, open in browser)
+> **[📱 EPUB for e-reader](assets/adam-smith_the-wealth-of-nations.epub)**
+
+The HTML is a self-contained scrollytelling viewer with all chapters, summaries, and the abstract. The EPUB uses progressive-disclosure with expandable sections. Both were generated entirely by Rixie — no manual editing.
+
+---
+
 ## V2 Pipeline (Recommended)
 
 This is the pipeline you should use. Six stages, each building on the last, fully checkpointed so you can Ctrl+C and resume without losing progress.
