@@ -1,96 +1,272 @@
-# ═══════════════════════════════════════════════════════════════
-# BookConvert Configuration
-# ═══════════════════════════════════════════════════════════════
-# Edit these values to match your setup. 
-# This file is the ONLY place you need to change LLM settings.
+# ══════════════════════════════════════════════════════════════════════════════
+# Rixie — Configuration
+# ══════════════════════════════════════════════════════════════════════════════
+# This is the ONLY configuration file you need to touch.
+# Everything — LLM connection, chunking, synthesis, V2 pipeline settings —
+# lives here.
+#
+# How to use:
+#   1. Set your LLM endpoint in the `llm` section (V1) or `v2.defaults` (V2)
+#   2. Adjust profile settings if you want different models per pipeline stage
+#   3. Run `uv run rixie v2 input/my_book.epub` and you're off
+#
+# For a step-by-step walkthrough, see docs/GETTING_STARTED.md
+# ══════════════════════════════════════════════════════════════════════════════
 
-# ─── LLM Connection ─────────────────────────────────────────
+
+# ─── LLM Connection ─────────────────────────────────────────────────────────
+# Base LLM settings used by the V1 pipeline directly.
+# V2 has its own extended configuration below (`v2.defaults` + `v2.profiles`)
+# but the values here are a good starting point.
+#
+# Supported backends (any OpenAI-compatible endpoint):
+#   Ollama    → http://localhost:11434/v1
+#   LM Studio → http://localhost:1234/v1
+#   vLLM      → http://localhost:8000/v1
+#   OpenAI    → https://api.openai.com/v1
+#   Any proxy → http://your-proxy:port/v1
+# ─────────────────────────────────────────────────────────────────────────────
 llm:
-  base_url: "http://localhost:58080/v1"  # OpenAI-compatible endpoint
-  api_key: "local"                       # API key (use "local" for no auth)
-  model: "gpt-4o-mini"                   # Model name
-  temperature: 0.3                       # Creativity (0=deterministic, 1=chaos)
-  request_timeout_seconds: 300           # Per-call timeout (seconds)
+  # OpenAI-compatible API endpoint URL.
+  # Must end with /v1 (or the path your provider expects).
+  base_url: "http://localhost:58080/v1"
 
-# ─── Chunking ───────────────────────────────────────────────
+  # API key for authentication.
+  # Use "local" (literally the string "local") for endpoints that don't
+  # require auth (Ollama, LM Studio, most local setups).
+  # Use your actual API key for OpenAI, Anthropic (via proxy), etc.
+  api_key: "local"
+
+  # Model identifier as recognized by your endpoint.
+  # Examples: gpt-4o-mini, gpt-4o, claude-sonnet-4-20250514,
+  #           llama-3.1-8b, qwen2.5-7b, deepseek-chat, etc.
+  model: "gpt-4o-mini"
+
+  # LLM sampling temperature. Range: 0.0 to ~1.0.
+  #   0.0-0.2 → deterministic, precise extraction (good for chunking)
+  #   0.3-0.5 → balanced, good for most tasks
+  #   0.6-1.0 → creative, good for synthesis/rewriting
+  temperature: 0.3
+
+  # Maximum time (seconds) to wait for a single LLM API call.
+  #   Local models on CPU: 300-600+
+  #   Local models on GPU: 120-300
+  #   Fast remote APIs: 60-120
+  # If you see frequent timeout errors, increase this value.
+  request_timeout_seconds: 300
+
+
+# ─── V1 Chunking ────────────────────────────────────────────────────────────
+# Controls how the V1 pipeline splits books into chunks for distillation.
+# V2 uses its own blocking system (see v2.blocking below).
+# ─────────────────────────────────────────────────────────────────────────────
 chunking:
-  max_tokens: 8000           # Max tokens per chunk (tiktoken)
-  encoding_model: "gpt-4o-mini"  # Which tokenizer to use
+  # Target maximum tokens per chunk (tiktoken-based).
+  # Larger chunks (8000+) → fewer, richer chunks per book.
+  # Smaller chunks (2000-4000) → more granular, better parallelism.
+  # Must fit within your model's context window minus overhead.
+  max_tokens: 8000
 
-# ─── Synthesis ──────────────────────────────────────────────
+  # Which tiktoken encoding model to use for token counting.
+  # Should match a model available in tiktoken's registry.
+  # Using the same model you're running gives the most accurate counts.
+  encoding_model: "gpt-4o-mini"
+
+
+# ─── V1 Synthesis ───────────────────────────────────────────────────────────
+# Controls how distilled chunks are merged into groups and the final article.
+# ─────────────────────────────────────────────────────────────────────────────
 synthesis:
-  temperature: 0.4           # Slightly higher for creative synthesis
-  context_window: 64000      # Your LLM's context window size
-  prompt_overhead: 2000      # Reserved for system prompt
-  response_reserve: 8000     # Reserved for LLM response
-  group_target_tokens: 8000  # Tokens per group (same as chunking max_tokens)
-  final_chunk_size: 40000    # Target tokens per final synthesis pass (0=auto from context_window)
+  # Temperature for synthesis steps (merging chunks into groups, groups into final).
+  # Slightly higher than chunking to allow creative connection-making.
+  temperature: 0.4
 
-# ─── Output ─────────────────────────────────────────────────
-output:
-  generate_html: true        # Export HTML after synthesis
-  generate_final: true       # Run final merge step
+  # Your LLM's total context window size in tokens.
+  # Common values:
+  #   gpt-4o-mini / gpt-4o   → 128000
+  #   claude-sonnet-4        → 200000
+  #   llama-3.1-8b           → 131072
+  #   qwen2.5-7b             → 32768 (default)
+  #   deepseek-chat          → 65536
+  #
+  # ⚠️  Set this to match YOUR model. If it's too high, the LLM will
+  #     receive prompts that exceed its actual context window.
+  context_window: 64000
 
-# ─── V2 Progressive Pipeline ───────────────────────────────────
+  # Tokens reserved for the system prompt and formatting overhead.
+  # Subtracted from context_window to calculate available content space.
+  prompt_overhead: 2000
+
+  # Tokens reserved for the LLM's response.
+  # Subtracted (along with prompt_overhead) from context_window.
+  response_reserve: 8000
+
+  # Target tokens per synthesis group.
+  # Should generally match chunking.max_tokens for consistency.
+  group_target_tokens: 8000
+
+  # Target tokens per final synthesis pass.
+  # Controls how much content the final "merge into article" step sees at once.
+  # Set to 0 to auto-calculate from context_window - overhead - reserve.
+  final_chunk_size: 40000
+
+
+# ─── V2 Progressive Pipeline ────────────────────────────────────────────────
+# V2 uses a layered configuration system:
+#   1. v2.defaults     → Base settings inherited by ALL profiles
+#   2. v2.profiles     → Per-stage overrides (each stage can use a different
+#                        model, temperature, or reasoning mode)
+#
+# Rule: Profile fields override defaults. Unset fields fall through to defaults.
+# ─────────────────────────────────────────────────────────────────────────────
 v2:
-  defaults:
-    base_url: "http://localhost:58080/v1"  # Shared OpenAI-compatible endpoint
-    api_key: "local"                       # Shared API key (use "local" for no auth)
-    model: "gpt-4o-mini"                   # Shared default model
-    temperature: 0.2                       # Shared default temperature
-    request_timeout_seconds: 300           # Shared per-call timeout (seconds)
-    thinking: true                         # Default thinking enabled
 
+  # ── V2 Defaults ──────────────────────────────────────────────────────────
+  # These values apply to ALL V2 pipeline stages unless a profile overrides them.
+  defaults:
+    # OpenAI-compatible endpoint (same format as llm.base_url)
+    base_url: "http://localhost:58080/v1"
+
+    # API key (same format as llm.api_key)
+    api_key: "local"
+
+    # Default model for all V2 stages
+    model: "gpt-4o-mini"
+
+    # Default temperature for all V2 stages
+    temperature: 0.2
+
+    # Per-call timeout in seconds
+    request_timeout_seconds: 300
+
+    # Enable reasoning/thinking effort.
+    # When true, the LLM is asked to reason step-by-step before answering.
+    # Improves quality but increases latency and token usage.
+    # Supported by: gpt-4o*, claude-3*, deepseek-*, and many others.
+    thinking: true
+
+  # ── V2 Profiles ──────────────────────────────────────────────────────────
+  # Each profile corresponds to a pipeline stage.
+  # You can override any of: model, temperature, base_url, api_key,
+  # request_timeout_seconds, thinking.
+  #
+  # Use case example:
+  #   mini_summary → fast cheap model (e.g., gpt-4o-mini, llama-3.1-8b)
+  #   cartography  → powerful model  (e.g., gpt-4o, claude-sonnet-4)
+  #   chapter_*    → mid-range model  (e.g., gpt-4o-mini with thinking)
+  # ───────────────────────────────────────────────────────────────────────────
   profiles:
+
+    # ── Mini-Summary ────────────────────────────────────────────────────────
+    # Stage 2: Each block gets a one-sentence summary + useful/not-useful label.
+    # Sequential (one LLM call per block) — speed matters here.
+    # Recommendation: Fastest model available, low temperature, no thinking.
     mini_summary:
       prompt_file: "prompt_block_mini_summary.md"
       temperature: 0.1
       thinking: false
-      # model: null
-      # base_url: null
-      # api_key: null
-      # request_timeout_seconds: 300
 
+    # ── Cartography ─────────────────────────────────────────────────────────
+    # Stage 1+3: LLM-based precise chunking + chapter grouping.
+    # Involves multi-turn validation (up to 6 rounds).
+    # Quality-critical — use your best model with thinking enabled.
     cartography:
       prompt_file: "prompt_cartographer_map.md"
       thinking: true
-      # model: null
-      # temperature: 0.1
-      # base_url: null
-      # api_key: null
-      # request_timeout_seconds: 300
 
+    # ── Chapter Short Summary ───────────────────────────────────────────────
+    # Stage 4: Each chapter gets a concise overview summary.
+    # Quality matters but speed is also relevant.
     chapter_short:
       prompt_file: "prompt_chapter_short.md"
       temperature: 0.25
       thinking: true
-      # model: null
-      # base_url: null
-      # api_key: null
-      # request_timeout_seconds: 300
 
+    # ── Chapter Detailed Summary ────────────────────────────────────────────
+    # Stage 4: Each chapter gets an in-depth extraction.
+    # This is the most content-rich output — quality matters most.
     chapter_long:
       prompt_file: "prompt_chapter_detailed.md"
       temperature: 0.25
       thinking: true
-      # model: null
-      # base_url: null
-      # api_key: null
-      # request_timeout_seconds: 300
 
+  # ── V2 Blocking (Precise Chunking) ──────────────────────────────────────
+  # Controls how source text is split into blocks before LLM processing.
+  #
+  # The precise chunking system works in TWO layers:
+  #
+  #   Layer 1 — Mechanical splitting:
+  #     Source text → synthetic pages at `target_tokens` size.
+  #     Used as fallback and as input to Layer 2.
+  #
+  #   Layer 2 — LLM boundary detection:
+  #     Overlapping windows of `window_tokens` tokens are sent to the LLM
+  #     as line-numbered text. The LLM identifies natural semantic boundaries
+  #     (paragraph breaks, topic shifts, section transitions).
+  #     Result: blocks that never split mid-thought.
+  #
+  #   Blocking ends when either:
+  #     a) The LLM returns valid boundaries for all windows, OR
+  #     b) LLM boundary detection fails → falls back to mechanical splits
+  # ───────────────────────────────────────────────────────────────────────────
   blocking:
-    encoding_model: "gpt-4o-mini"  # Tokenizer model for synthetic page splitting
-    target_tokens: 4096             # Target synthetic-page size (mechanical fallback)
-    min_tokens: 3884                # Prefer not to split below this unless needed
-    max_tokens: 4396                # Hard-ish cap before forcing a split
-    # Step 0: Precise LLM boundary detection
-    window_tokens: 8000             # Token budget per LLM chunking window
-    max_boundaries_per_window: 16   # Max boundaries the LLM can return per window
-    overlap_pct: 0.05               # Overlap between adjacent windows (5%)
-  execution:
-    parallel_calls: 1               # Parallel lightweight LLM calls (set 1 for chunky/local runs)
-    checkpoint_pct: 5.0              # Save progress every N% of blocks/chapters (0=every step, 100=only at end)
-    context_window: 128000           # Your model's total context window in tokens
-    prompt_overhead: 4000            # Reserve for system prompts + formatting overhead
-    response_reserve: 8000           # Reserve for the LLM's response tokens
+    # Tokenizer model for counting tokens during synthetic page splitting.
+    encoding_model: "gpt-4o-mini"
 
+    # Target size of each synthetic page (tokens).
+    # These are the "pages" that get grouped into LLM windows.
+    target_tokens: 4096
+
+    # Minimum tokens before forcing a split.
+    # If a synthetic page is below this AND the next content fits,
+    # the split is deferred to keep pages reasonably sized.
+    min_tokens: 3884
+
+    # Hard maximum tokens per synthetic page.
+    # If a page reaches this limit, it's forcibly split even mid-content.
+    max_tokens: 4396
+
+    # Token budget per LLM chunking window.
+    # Each window sent to the LLM contains up to this many tokens of content.
+    # Larger = fewer calls but more context for the LLM.
+    window_tokens: 8000
+
+    # Maximum number of semantic boundaries the LLM can return per window.
+    # Higher values = more granular blocks but more processing.
+    max_boundaries_per_window: 16
+
+    # Overlap between adjacent windows (as a decimal fraction).
+    # 0.05 = 5% overlap. Ensures no boundary is missed between windows.
+    # Increase for better coverage at the cost of more processing.
+    overlap_pct: 0.05
+
+  # ── V2 Execution ─────────────────────────────────────────────────────────
+  # Controls parallelism, checkpointing, and context window accounting.
+  # ───────────────────────────────────────────────────────────────────────────
+  execution:
+    # Number of parallel LLM calls for stages that support parallelism.
+    #   1  → Sequential (safe for all models, recommended for local)
+    #   3-5 → Parallel (fast remote models like gpt-4o-mini)
+    #   Higher values risk rate limits on APIs — increase gradually.
+    parallel_calls: 1
+
+    # How often to save progress as a percentage of total work.
+    #   5.0  → Save every 5% (default). Ctrl+C costs at most 5% overhead.
+    #   0    → Save after every single step (maximum safety, maximum I/O).
+    #   100  → Save only at the end (risk losing everything on crash).
+    # Applies to: mini-summaries (per-block), chapter summaries (per-chapter).
+    checkpoint_pct: 5.0
+
+    # Your model's total context window in tokens.
+    # Used to calculate safe prompt sizes for each stage.
+    # ⚠️  Set this to match YOUR model. Too high → truncated prompts.
+    #     See the table under synthesis.context_window for common values.
+    context_window: 128000
+
+    # Tokens reserved for system prompts and formatting overhead.
+    # Subtracted from context_window for each stage's prompt calculation.
+    prompt_overhead: 4000
+
+    # Tokens reserved for the LLM's response tokens.
+    # Subtracted (with prompt_overhead) from context_window.
+    response_reserve: 8000
