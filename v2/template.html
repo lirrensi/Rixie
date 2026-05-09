@@ -2044,7 +2044,7 @@
      ════════════════════════════════════════════════════════════ -->
     <section class="end-screen">
       <div class="attribution" id="endAttribution"></div>
-      <div class="sign-off">Built with care.</div>
+      <div class="sign-off" id="endSignOff">Built with care.</div>
     </section>
 
     <!-- ════════════════════════════════════════════════════════════
@@ -2179,6 +2179,8 @@
         // ── End Screen ──
         document.getElementById('endAttribution').textContent =
           title + ' \u00B7 ' + authorStr
+        document.getElementById('endSignOff').innerHTML =
+          'Distilled by <a href="https://github.com/lirrensi/Rixie" target="_blank" rel="noopener">Rixie V2</a>'
 
         // ── Time Calculation ──
         totalMinutes = readingTime
