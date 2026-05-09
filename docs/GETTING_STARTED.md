@@ -238,37 +238,43 @@ v2:
 
 #### V2 Blocking (Precise Chunking)
 
-Controls how the source text is split into blocks before LLM processing:
+Controls how source text is split into blocks. There's one real path:
+
+```
+source text → split into overlapping windows of `window_tokens` size
+            → send each window to LLM as line-numbered text
+            → LLM returns semantic boundary lines
+            → those lines become your blocks
+```
+
+If the LLM returns no boundaries (fails completely), it falls back to a simple mechanical split at ~1000 tokens — hardcoded, not configurable.
+
+| Setting | What it controls | Example |
+|---------|-----------------|---------|
+| `window_tokens` | How much text you submit per LLM call | Send 16k tokens → LLM reads it line by line |
+| `max_boundaries_per_window` | Max cuts the LLM can make in one window | 16 cuts per 16k window → blocks of ~1000 tokens minimum |
+| `overlap_pct` | Fractional overlap between adjacent windows | 5% ensures boundaries near edges get a second look |
 
 ```yaml
 v2:
   blocking:
-    encoding_model: "gpt-4o-mini"     # Tokenizer for page splitting
-    target_tokens: 4096                # Target synthetic-page size
-    min_tokens: 3884                   # Minimum before forcing a split
-    max_tokens: 4396                   # Hard cap before forcing a split
-    window_tokens: 8000                # Token budget per LLM chunking window
-    max_boundaries_per_window: 16      # Max boundaries the LLM can return
+    encoding_model: "gpt-4o-mini"     # Tokenizer
+    window_tokens: 16000               # How much text per LLM call
+    max_boundaries_per_window: 16      # Max cuts the LLM can return per call
     overlap_pct: 0.05                  # 5% overlap between windows
 ```
-
-The precise chunking system works in two layers:
-1. **Mechanical splitting** — Source text is split into synthetic pages at the `target_tokens` size.
-2. **LLM boundary detection** — Overlapping windows of `window_tokens` are sent to the LLM, which identifies natural semantic boundaries (paragraph breaks, topic shifts). The LLM returns up to `max_boundaries_per_window` boundaries.
 
 #### V2 Execution
 
 ```yaml
 v2:
   execution:
-    parallel_calls: 1                  # Parallel LLM calls (increase for fast remote models)
     checkpoint_pct: 5.0                 # Save progress every N% (0 = every step, 100 = only at end)
     context_window: 128000              # Model's total context window
     prompt_overhead: 4000               # Tokens reserved for system prompts
     response_reserve: 8000              # Tokens reserved for LLM responses
 ```
 
-- `parallel_calls`: Set to 1 for local models (avoids rate limits and memory pressure). Increase to 3-5 for fast remote APIs.
 - `checkpoint_pct`: At 5%, progress saves every 5% of work completed. Ctrl+C recovery costs at most 5% of redundant calls.
 - `context_window` / `prompt_overhead` / `response_reserve`: Used to calculate available tokens for content. These should match your model's actual limits.
 

@@ -190,66 +190,42 @@ v2:
       temperature: 0.25
       thinking: true
 
-  # ── V2 Blocking (Precise Chunking) ──────────────────────────────────────
-  # Controls how source text is split into blocks before LLM processing.
+  # ── V2 Blocking (Precise Chunking) ───────────────────────────────────────
+  # Controls how source text is split into blocks for processing.
   #
-  # The precise chunking system works in TWO layers:
+  # Source text → overlapping windows of `window_tokens` tokens → LLM returns
+  # semantic boundary lines → those lines become your blocks. No mid-thought
+  # splits. If the LLM returns no boundaries, it falls back to a simple
+  # mechanical split (hardcoded ~1000 tokens, not configurable).
   #
-  #   Layer 1 — Mechanical splitting:
-  #     Source text → synthetic pages at `target_tokens` size.
-  #     Used as fallback and as input to Layer 2.
-  #
-  #   Layer 2 — LLM boundary detection:
-  #     Overlapping windows of `window_tokens` tokens are sent to the LLM
-  #     as line-numbered text. The LLM identifies natural semantic boundaries
-  #     (paragraph breaks, topic shifts, section transitions).
-  #     Result: blocks that never split mid-thought.
-  #
-  #   Blocking ends when either:
-  #     a) The LLM returns valid boundaries for all windows, OR
-  #     b) LLM boundary detection fails → falls back to mechanical splits
+  # This is the only path. window_tokens is how much text the LLM sees per
+  # call. max_boundaries_per_window is how many cuts it can make.
   # ───────────────────────────────────────────────────────────────────────────
   blocking:
-    # Tokenizer model for counting tokens during synthetic page splitting.
+    # Tokenizer model for counting tokens.
     encoding_model: "gpt-4o-mini"
 
-    # Target size of each synthetic page (tokens).
-    # These are the "pages" that get grouped into LLM windows.
-    target_tokens: 4096
+    # How many tokens of text to send to the LLM per call.
+    # Each LLM call receives a chunk of text this big (as line-numbered text)
+    # and returns where semantic boundaries (paragraph breaks, topic shifts)
+    # should fall. Larger = fewer calls but more context for the LLM.
+    window_tokens: 16384
 
-    # Minimum tokens before forcing a split.
-    # If a synthetic page is below this AND the next content fits,
-    # the split is deferred to keep pages reasonably sized.
-    min_tokens: 3884
-
-    # Hard maximum tokens per synthetic page.
-    # If a page reaches this limit, it's forcibly split even mid-content.
-    max_tokens: 4396
-
-    # Token budget per LLM chunking window.
-    # Each window sent to the LLM contains up to this many tokens of content.
-    # Larger = fewer calls but more context for the LLM.
-    window_tokens: 8000
-
-    # Maximum number of semantic boundaries the LLM can return per window.
-    # Higher values = more granular blocks but more processing.
+    # Maximum number of semantic boundary lines the LLM can return per window.
+    # More boundaries = more granular blocks. Rough guidance:
+    #   window_tokens / max_boundaries ≈ minimum block size
+    #   e.g., 16000 / 16 = blocks of ~1000 tokens minimum
     max_boundaries_per_window: 16
 
     # Overlap between adjacent windows (as a decimal fraction).
-    # 0.05 = 5% overlap. Ensures no boundary is missed between windows.
-    # Increase for better coverage at the cost of more processing.
+    # 0.05 = 5% overlap. Ensures boundaries near window edges get a second
+    # opinion from the next window. Increase for better coverage.
     overlap_pct: 0.05
 
   # ── V2 Execution ─────────────────────────────────────────────────────────
-  # Controls parallelism, checkpointing, and context window accounting.
+  # Controls checkpointing frequency and context window accounting.
   # ───────────────────────────────────────────────────────────────────────────
   execution:
-    # Number of parallel LLM calls for stages that support parallelism.
-    #   1  → Sequential (safe for all models, recommended for local)
-    #   3-5 → Parallel (fast remote models like gpt-4o-mini)
-    #   Higher values risk rate limits on APIs — increase gradually.
-    parallel_calls: 1
-
     # How often to save progress as a percentage of total work.
     #   5.0  → Save every 5% (default). Ctrl+C costs at most 5% overhead.
     #   0    → Save after every single step (maximum safety, maximum I/O).
