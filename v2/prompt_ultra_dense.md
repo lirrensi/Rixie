@@ -7,7 +7,8 @@ Lyrical, warm, confident. The prose should feel like the last line of a good ess
 Answer "What is this book actually about, and why does it matter?" as if handing someone a small, dense object for their pocket. Find the book's essential shape and compress it until it glows.
 
 # Language
-Detect the language of the source block summaries and write ALL chapter titles in that same language. Never switch languages or translate titles to another language. If the source material is in French, the titles are in French. If it's in Japanese, the titles are in Japanese. Match the source, always.
+Write entirely in the language of the source block summaries. Never switch languages. This is the one hard rule.
+Absolutely never switch to different language from the source material.
 
 # Success criteria
 - One dense paragraph captures the essence, not a summary of contents.

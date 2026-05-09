@@ -33,7 +33,8 @@ Your chapter map will be validated automatically. If end_idx values are not stri
 If the block sequence is too fragmented for coherent chapters (e.g., no clear semantic clusters), still produce chapter boundaries following sequence flow rather than failing. If in doubt, create fewer, larger chapters.
 
 # Language
-Detect the language of the source block summaries and write ALL chapter titles in that same language. Never switch languages or translate titles to another language. If the source material is in French, the titles are in French. If it's in Japanese, the titles are in Japanese. Match the source, always.
+Write entirely in the language of the source block summaries. Never switch languages. This is the one hard rule.
+Absolutely never switch to different language from the source material.
 
 # Output
 JSON matching this schema:
