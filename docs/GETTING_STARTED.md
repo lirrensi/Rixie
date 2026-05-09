@@ -4,12 +4,30 @@
 
 ---
 
+## Quick Reference
+
+| I want to... | Jump to |
+|---|---|
+| Install and run my first book | [Installation](#installation) → [Configuration](#configuration) → [Running the Pipeline](#running-the-pipeline) |
+| Pick an LLM (local or cloud) | [Choosing Your LLM Backend](#choosing-your-llm-backend) |
+| Understand every config option | [Configuration](#configuration) |
+| Change how the output *sounds* | [Prompt Files](#prompt-files) — only Personality and Goal |
+| Run V2 on a book | [V2 Pipeline](#v2-pipeline-recommended) |
+| Run V1 (legacy) | [V1 Pipeline](#v1-pipeline-legacy) |
+| Generate audiobook / podcast | [Audio Output](#audio-output) |
+| See all commands at a glance | [Commands Cheatsheet](#commands-cheatsheet) |
+| See the Makefile targets | [Makefile Reference](#makefile-reference) |
+| Explore the codebase layout | [Project Structure](#project-structure) |
+
+---
+
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Choosing Your LLM Backend](#choosing-your-llm-backend)
 - [Configuration](#configuration)
+- [Prompt Files](#prompt-files)
 - [Running the Pipeline](#running-the-pipeline)
   - [V2 Pipeline (Recommended)](#v2-pipeline-recommended)
   - [V1 Pipeline (Legacy)](#v1-pipeline-legacy)
@@ -277,6 +295,73 @@ v2:
 
 - `checkpoint_pct`: At 5%, progress saves every 5% of work completed. Ctrl+C recovery costs at most 5% of redundant calls.
 - `context_window` / `prompt_overhead` / `response_reserve`: Used to calculate available tokens for content. These should match your model's actual limits.
+
+---
+
+## Prompt Files
+
+Rixie's pipeline is driven by **prompt files** — Markdown files that tell each stage's LLM call *how* to think and *what* to produce. They live alongside the code:
+
+| Prompt File | Pipeline | Stage | Purpose |
+|---|---|---|---|
+| `v2/prompt_precise_chunk.md` | V2 | Cartography (Step 0) | LLM finds semantic boundaries in text windows |
+| `v2/prompt_block_mini_summary.md` | V2 | Mini-summaries | Each block gets a one-sentence semantic fingerprint |
+| `v2/prompt_cartographer_map.md` | V2 | Cartography (grouping) | LLM groups blocks into chapters via multi-turn validation |
+| `v2/prompt_chapter_short.md` | V2 | Chapter summaries (short) | Concise, friendly overview of each chapter |
+| `v2/prompt_chapter_detailed.md` | V2 | Chapter summaries (detailed) | In-depth extraction of each chapter |
+| `v2/prompt_ultra_dense.md` | V2 | Overview / Abstract | One dense paragraph capturing the book's essence |
+| `v1/distill_chunk_prompt.md` | V1 | Distillation | How each chunk is distilled |
+| `v1/distill_final_prompt.md` | V1 | Final synthesis | How the final article is written |
+
+### What You Can Safely Change
+
+Every prompt is built from sections like `# Role`, `# Personality`, `# Goal`, `# Constraints`, `# Output`, etc. **Not all sections are equal.**
+
+| Section | Safe to change? | Why |
+|---------|----------------|-----|
+| **Personality** | ✅ Yes | Voice, tone, character — "warm and curious", "sharp and direct", "academic and precise". This is yours to play with. |
+| **Goal** | ⚠️ Partially | You can refine *what to focus on* or *what to prioritize*. But don't remove the core objective — the LLM needs to know its job. |
+| **Role** | ⚠️ Partially | You can tweak the persona metaphor, but the role definition is tightly coupled to what the stage produces. |
+| **Language** | ❌ No | Hard rule that keeps output in the source language. Breaking this breaks multilingual books. |
+| **Constraints** | ❌ Mostly no | Many constraints encode pipeline expectations (e.g., "never reference the source as a text"). Removing them produces output that doesn't fit the pipeline's design. |
+| **Output format** | ❌ No | Schema requirements (JSON structure, prose rules, length). Changing these breaks downstream stages that expect a specific format. |
+| **Success criteria** | ❌ No | Quality guardrails. Removing them degrades output quality significantly. |
+| **Stop rules** | ❌ No | Error-handling logic. Removing them causes failures on edge cases. |
+
+### The Golden Rule
+
+**Only change Personality and maybe tweak the Goal.** Everything else is structural wiring — it looks like prose but it's really code that the LLM reads to produce correctly formatted, pipeline-compatible output.
+
+In practice:
+
+- **`prompt_chapter_short.md`** — Change the Personality to match your desired voice. Refine the Goal to emphasize what you care about (e.g., "focus on actionable takeaways" or "emphasize conceptual connections"). Leave Constraints, Output, Success criteria, and Language untouched.
+- **`prompt_chapter_detailed.md`** — Same. Change Personality and Goal emphasis. The rest is scaffolding.
+- **`prompt_ultra_dense.md`** — Same pattern. Personality and Goal are yours.
+- **All other prompts** — Better to not touch at all. `prompt_precise_chunk.md`, `prompt_block_mini_summary.md`, and `prompt_cartographer_map.md` have JSON schemas and pipeline logic woven into their instructions. Changing them risks breaking the pipeline.
+
+### Example
+
+If you want your chapter summaries to sound more academic:
+
+```markdown
+# Personality
+Analytical, precise, measured. Like a senior researcher summarizing findings for a peer.
+
+# Goal
+Emphasize methodological rigor, evidence chains, and the logical structure of the argument.
+```
+
+If you want them more playful:
+
+```markdown
+# Personality
+Playful, irreverent, conversational. Like a favourite teacher who makes everything click.
+
+# Goal
+Focus on the counter-intuitive twists and the "aha" moments.
+```
+
+Leave everything else in the file exactly as it is.
 
 ---
 
