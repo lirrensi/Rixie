@@ -785,30 +785,31 @@ def generate_precise_blocks(
               f"lines {global_start + 1}–{global_start + len(window_lines)} "
               f"({len(window_lines)} lines, ~{_token_count('\n'.join(window_lines), encoder)} tokens)", flush=True)
 
-        try:
-            result: PreciseChunkResult = _call_json_sync(
-                [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": formatted},
-                ],
-                llm_settings,
-                response_model=PreciseChunkResult,
-            )
+        # Window-level failure is a HARD failure: a missing window leaves
+        # gaps in our boundary map, which corrupts every downstream chunk.
+        # The retry layer (structured_completion) has already tried multiple
+        # times with backoff; if we still don't have a result, we abort the
+        # whole step and let the caller decide what to do. We never
+        # silently continue with incomplete data.
+        result: PreciseChunkResult = _call_json_sync(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": formatted},
+            ],
+            llm_settings,
+            response_model=PreciseChunkResult,
+        )
 
-            # Convert local 1-based line numbers to global 0-based indices
-            for local_line in result.boundaries:
-                if 1 <= local_line <= len(window_lines):
-                    global_line_idx = global_start + local_line - 1
-                    # Exclude very first and very last line of the entire text
-                    if 0 < global_line_idx < len(raw_lines):
-                        all_boundaries.add(global_line_idx)
+        # Convert local 1-based line numbers to global 0-based indices
+        for local_line in result.boundaries:
+            if 1 <= local_line <= len(window_lines):
+                global_line_idx = global_start + local_line - 1
+                # Exclude very first and very last line of the entire text
+                if 0 < global_line_idx < len(raw_lines):
+                    all_boundaries.add(global_line_idx)
 
-            print(f"   ✅ Window {win_idx + 1}: {len(result.boundaries)} boundaries → "
-                  f"{result.boundaries[:5]}{'...' if len(result.boundaries) > 5 else ''}", flush=True)
-
-        except Exception as e:
-            print(f"   ⚠️ Window {win_idx + 1} failed: {e}", flush=True)
-            continue
+        print(f"   ✅ Window {win_idx + 1}: {len(result.boundaries)} boundaries → "
+              f"{result.boundaries[:5]}{'...' if len(result.boundaries) > 5 else ''}", flush=True)
 
     sorted_boundaries = sorted(all_boundaries)
     print(f"   📏 Collected {len(sorted_boundaries)} unique boundaries across all windows", flush=True)
