@@ -23,6 +23,9 @@ DEFAULT_V2_CONFIG: dict = {
             "temperature": None,
             "request_timeout_seconds": 300,
             "thinking": True,
+            "decision_base_url": None,
+            "decision_model": None,
+            "decision_timeout_seconds": 120,
         },
         "profiles": {
             "mini_summary": {
@@ -73,7 +76,18 @@ DEFAULT_V2_CONFIG: dict = {
             "context_window": 128000,
             "prompt_overhead": 4000,
             "response_reserve": 8000,
-
+            # Pre-cartography style: "classic" or "decision".
+            # "classic": sequential generative only, no decision server needed.
+            # "decision": decision pre-gate + parallel fan-outs (needs decision_base_url).
+            "precart_mode": "classic",
+            "decision_enabled": True,
+            "decision_batch_blocks": 20,
+            "decision_batch_tokens": 24000,
+            "decision_useful_high": 0.7,
+            "decision_useful_low": 0.1,
+            "gate_question_file": "question_useful.md",
+            "mini_summary_workers": 1,
+            "precise_workers": 1,
         },
     }
 }

@@ -67,8 +67,9 @@ source.epub
 │ Stage 2: MINI-SUMMARIES                              │
 │ Each block gets a one-sentence summary + useful/not  │
 │ useful classification. Non-useful blocks excluded.   │
-│ SEQUENTIAL — one LLM call per block.                 │
-└──────────────────────────────────────────────────────┘
+│ Classic: SEQUENTIAL, one LLM call per block.         │
+│ Decision mode: binary pre-gate skips boilerplate     │
+│ upfront, then parallel fingerprint workers.          │
     │
     ▼
 ┌──────────────────────────────────────────────────────┐
@@ -117,6 +118,20 @@ source.epub
 
 **Per-Profile LLM Settings:** Each pipeline stage can use a different model, temperature, or thinking mode. Run cheap models for bulk work (mini-summaries) and expensive ones for quality-critical stages (cartography, chapter summaries).
 
+### Decision Mode (Optional Pre-Cartography Acceleration)
+
+V2's pre-cartography stages (precise chunking + mini-summaries) run in one of two styles, flipped by a single config key (`v2.execution.precart_mode`):
+
+| | `classic` (default) | `decision` |
+|---|---|---|
+| Mini-summaries | Sequential, one generative call per block | Binary pre-gate skips boilerplate, then parallel fingerprint workers |
+| Precise chunking | Sequential windows | Parallel windows |
+| Extra server | None | Decision-model endpoint (`/v1/systemone`, separate process) |
+| Behavior | Original, works everywhere | Same outputs, fewer wasted calls |
+
+Classic is the default and needs nothing new — all `decision_*` / `*_workers` keys are ignored unless you opt in. Decision mode asks a decision model one yes/no question per block ("does this contain actual book content?") in batched requests that generate no text; blocks scoring at or below `decision_useful_low` are stamped non-content with no LLM call, everything else generates as usual. Uncertain scores and gate errors fail open to generation, so the worst case is the classic cost, never lost content.
+
+Calibrated 2026-10-13 against [Cloudflare Clef-Flash](https://openrouter.ai/cloudflare/clef-flash) (Q8 GGUF via llama-server) on 8 books / 2,862 labeled blocks: thresholds low=0.1 high=0.7 → 97.8% accuracy-on-acted, skips 4.5% of blocks, catches 39% of non-content, loses 0.3% of content blocks (index lists, footnote dumps — verified by read-through, not just the metric). Raw scores: `private/gate_benchmark_2026-10-13.jsonl`. Recalibrate after rewording the gate question or switching models: `uv run python -m v2.calibrate --per-book`. Full runbook in [Getting Started](docs/GETTING_STARTED.md#v2-configuration).
 ---
 
 ## V1 Pipeline (Legacy)
@@ -143,7 +158,7 @@ Start with the Final for the big picture. Go to Groups for depth. Dive into Chun
 - **Audio output** — Audiobooks (V1) and dual-length podcasts (V2) via edge-tts with 400+ neural voices.
 - **Multiple formats** — Read in your browser (HTML), on your e-reader (EPUB), or listen on the go (MP3).
 - **Any LLM backend** — OpenAI, local (Ollama, LM Studio, vLLM), or any OpenAI-compatible endpoint.
-- **Per-stage model control** — Each pipeline stage can use a different model, temperature, or reasoning mode.
+- **Decision-mode pre-gate (optional)** — Binary yes/no model skips boilerplate blocks before fingerprinting; calibrated vs Clef-Flash, one config flip, classic path untouched.
 
 ---
 

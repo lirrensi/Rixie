@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import sys
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,8 +30,9 @@ except ImportError:  # pragma: no cover
 from v2.blocker import build_blocks
 from v2.budget import ContextBudget, estimate_tokens, split_text_by_tokens
 from v2.checkpoint import CheckpointTracker, save_artifact_sync
+from v2.decisions import DecisionError, DecisionSettings, noul_batch
 from v2.pipeline import structured_completion
-from v2.prompts import load_prompt
+from v2.prompts import load_gate_question, load_prompt
 from v2.schema import BookArtifact, BlockArtifact, ChapterArtifact, StageState
 import yaml
 
@@ -171,22 +174,120 @@ def _split_oversized_block_for_mini_summary(
     return combined
 
 
+# ── Decision pre-gate (useful / non-content) ──────────────────────────────────
+# One yes/no question per block, batched into /v1/systemone requests.
+# The question + criteria live in v2/question_useful.md (editable, English).
+#   score <= low   → non-content: stamp useful=False/"N/A", skip generation.
+#   score >= high  → confident content: generate the fingerprint as usual.
+#   between / gate error → fail open: generate (ambiguous blocks stay
+#   included, preserving prompt_block_mini_summary.md's err-toward-inclusion).
+DEFAULT_GATE_QUESTION_FILE = "question_useful.md"
+
+def _gate_useful_scores(
+    items: list[tuple[str, str]],
+    *,
+    decision: DecisionSettings,
+    batch_blocks: int,
+    batch_tokens: int,
+    encoding_model: str,
+    gate_question_file: str = DEFAULT_GATE_QUESTION_FILE,
+) -> tuple[dict[str, float | None], dict[str, int]]:
+    """Score pending blocks via the decision model. Fail-open per block.
+
+    Returns ({block_id: score or None when the gate failed}, stats).
+    Batches are packed by estimated input tokens (<= batch_tokens, at most
+    batch_blocks each) so a known server ceiling (ubatch/ctx) is respected
+    up front; on DecisionError they split in half recursively, so an
+    undersized server degrades to smaller batches instead of total failure.
+    """
+    scores: dict[str, float | None] = {}
+    stats = {"batches": 0, "splits": 0, "failed_open": 0}
+    encoder = _get_encoder(encoding_model)
+    gate_instructions, gate_criteria_true, gate_criteria_false = load_gate_question(
+        gate_question_file
+    )
+
+    def _est_tokens(text: str) -> int:
+        return _token_count(text, encoder)
+
+    def score_chunk(chunk: list[tuple[str, str]]) -> None:
+        if not chunk:
+            return
+        state = {block_id: text for block_id, text in chunk}
+        try:
+            stats["batches"] += 1
+            scores.update(
+                noul_batch(
+                    decision,
+                    state,
+                    gate_instructions,
+                    gate_criteria_true,
+                    gate_criteria_false,
+                )
+            )
+        except DecisionError as e:
+            if len(chunk) == 1:
+                scores[chunk[0][0]] = None
+                stats["failed_open"] += 1
+                print(f"   ⚠️ Gate failed open for {chunk[0][0]}: {e}", flush=True)
+                return
+            stats["splits"] += 1
+            mid = len(chunk) // 2
+            score_chunk(chunk[:mid])
+            score_chunk(chunk[mid:])
+
+    # Pack blocks greedily: each request's state stays under batch_tokens
+    # (plus ~100 tokens per question for instructions/criteria overhead).
+    max_blocks = max(1, batch_blocks)
+    token_cap = max(1024, batch_tokens)
+    chunk: list[tuple[str, str]] = []
+    chunk_tokens = 0
+    for item in items:
+        item_tokens = _est_tokens(item[1]) + 100
+        if chunk and (len(chunk) >= max_blocks or chunk_tokens + item_tokens > token_cap):
+            score_chunk(chunk)
+            chunk = []
+            chunk_tokens = 0
+        chunk.append(item)
+        chunk_tokens += item_tokens
+    score_chunk(chunk)
+    return scores, stats
+
+
 def generate_block_mini_summaries(
     artifact: BookArtifact,
     workspace_dir: Path,
     *,
     llm_settings: LLMSettings,
-    parallel_calls: int = 8,  # IGNORED - always sequential now
+    parallel_calls: int = 1,  # workers; 0/1 = sequential classic, >1 = decision-mode fan-out
     prompt_file: str = "prompt_block_mini_summary.md",
     checkpoint_pct: float = 5.0,
     max_per_block_retries: int = 3,
     budget: ContextBudget | None = None,
+    # All decision_* below are inert unless decision is set and enabled.
+    decision: DecisionSettings | None = None,
+    decision_batch_blocks: int = 20,
+    decision_batch_tokens: int = 24000,
+    decision_high: float = 0.7,
+    decision_low: float = 0.1,
+    gate_question_file: str = DEFAULT_GATE_QUESTION_FILE,
 ) -> BookArtifact:
-    """Generate mini summaries SEQUENTIALLY with per-block retry and checkpoint saves.
+    """Generate mini summaries sequentially (classic) or with a decision pre-gate
+    and parallel workers (decision mode).
 
-    Saves the artifact to disk every ``checkpoint_pct`` % of progress (default 5 %)
-    so crashes lose at most one checkpoint interval of work.  Blocks that fail
-    after all retries raise RuntimeError — the book is skipped entirely.
+    Classic (decision=None): every pending block gets one generative call,
+    sequentially — the pre-gate code path never runs, no decision server needed.
+
+    Decision mode (decision set and enabled):
+    Phase 1 (gate): one batched yes/no question per pending block. Blocks
+    scoring <= decision_low are stamped useful=False/"N/A" with no generative
+    call. Everything else proceeds. Gate errors fail open to generation.
+
+    Phase 2 (generate): fingerprints for the surviving blocks, with
+    ``parallel_calls`` threads (each block retried up to
+    ``max_per_block_retries``). Checkpoint saves stay resume-safe: a block is
+    "done" iff mini_summary is not None. Any block failing all retries is a
+    HARD FAIL — the book is skipped entirely.
     """
     import time as time_mod
 
@@ -218,82 +319,121 @@ def generate_block_mini_summaries(
 
     print(f"   → Resuming {len(pending_indices)} pending blocks (skipping {total - len(pending_indices)} complete)", flush=True)
 
-    print(f"   🔥 Processing {len(pending_indices)} blocks SEQUENTIALLY "
-          f"(max {max_per_block_retries} retries per block, save every {checkpoint_pct:.0f}%)", flush=True)
+    gate_stats = {"skipped": 0, "generate": 0, "uncertain": 0, "failed_open": 0,
+                  "batches": 0, "splits": 0}
+    gate_model: str | None = None
+    generate_indices = list(pending_indices)
 
-    checkpoint = CheckpointTracker(len(pending_indices), every_pct=checkpoint_pct)
-
-    # Process ONE block at a time, with per-block retries
-    for idx in pending_indices:
-        block = artifact.blocks[idx]
-        print(f"   📤 Processing {idx+1}/{total}: {block.block_id}", flush=True)
-
-        # ── Check if this block is too large for a single mini-summary call ──
-        if budget is not None:
-            system_text = load_prompt(prompt_file)
-            system_tok = estimate_tokens(system_text, llm_settings.model)
-            block_tok = estimate_tokens(block.text or "", llm_settings.model)
-            total_est = system_tok + block_tok + 50  # 50 for "BLOCK:\\n" overhead
-            if total_est > budget.usable:
-                combined = _split_oversized_block_for_mini_summary(
-                    block,
-                    budget=budget,
-                    llm_settings=llm_settings,
-                    prompt_file=prompt_file,
-                    max_retries=max_per_block_retries,
-                )
-                if combined is not None:
-                    artifact.blocks[idx].useful = True
-                    artifact.blocks[idx].mini_summary = combined
-
-                    if checkpoint.should_save():
-                        save_artifact_sync(artifact, book_yaml_path)
-                        print(f"   💾 Checkpoint save at {checkpoint.progress_pct:.0f}% ({idx+1}/{total})", flush=True)
-
-                    print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → split into parts, useful=True", flush=True)
-                    continue
+    # ── Phase 1: decision pre-gate ──
+    if decision is not None and decision.enabled:
+        gate_model = decision.model or decision.base_url
+        print(f"   🧷 Gate: scoring {len(pending_indices)} pending block(s) "
+              f"(skip <= {decision_low}, confident >= {decision_high})", flush=True)
+        items = [
+            (artifact.blocks[idx].block_id, artifact.blocks[idx].text or "")
+            for idx in pending_indices
+        ]
+        scores, batch_stats = _gate_useful_scores(
+            items, decision=decision, batch_blocks=decision_batch_blocks,
+            batch_tokens=decision_batch_tokens,
+            encoding_model=budget._encoding_model if budget else "gpt-4o-mini",
+            gate_question_file=gate_question_file,
+        )
+        gate_stats["batches"] = batch_stats["batches"]
+        gate_stats["splits"] = batch_stats["splits"]
+        by_id = {artifact.blocks[idx].block_id: idx for idx in pending_indices}
+        generate_indices = []
+        for block_id, _ in items:
+            idx = by_id[block_id]
+            score = scores.get(block_id)
+            if score is not None and score <= decision_low:
+                artifact.blocks[idx].useful = False
+                artifact.blocks[idx].mini_summary = "N/A"
+                gate_stats["skipped"] += 1
+            else:
+                generate_indices.append(idx)
+                if score is None:
+                    gate_stats["failed_open"] += 1
+                elif score >= decision_high:
+                    gate_stats["generate"] += 1
                 else:
-                    # Fall through to normal processing (the split couldn't determine a budget)
-                    print(f"   ↻ Block {block.block_id} oversized but can't split — trying normal call", flush=True)
+                    gate_stats["uncertain"] += 1
+        print(f"   🧷 Gate: {gate_stats['skipped']} skipped, "
+              f"{gate_stats['generate']} confident, {gate_stats['uncertain']} uncertain, "
+              f"{gate_stats['failed_open']} failed-open "
+              f"({gate_stats['batches']} batches, {gate_stats['splits']} splits)", flush=True)
+        # Persist skips before the expensive phase.
+        save_artifact_sync(artifact, book_yaml_path)
+    else:
+        print("   🧷 Gate: disabled — generating all pending blocks", flush=True)
 
-        success = False
-        last_error: Exception | None = None
+    # ── Phase 2: generate fingerprints ──
+    workers = max(1, int(parallel_calls or 1))
+    if generate_indices:
+        print(f"   🔥 Processing {len(generate_indices)} blocks "
+              f"({'SEQUENTIAL' if workers == 1 else f'{workers} workers'}; "
+              f"max {max_per_block_retries} retries per block, save every {checkpoint_pct:.0f}%)", flush=True)
 
-        for attempt in range(1, max_per_block_retries + 1):
-            try:
-                result = _call_json_sync(
-                    [
-                        {"role": "system", "content": load_prompt(prompt_file)},
-                        {"role": "user", "content": f"BLOCK:\\n{block.text}"},
-                    ],
-                    llm_settings,
-                    response_model=MiniSummaryResult,
-                )
+        checkpoint = CheckpointTracker(len(generate_indices), every_pct=checkpoint_pct)
+        state_lock = threading.Lock()
+        system_text = load_prompt(prompt_file)
 
-                # Update artifact in memory
-                artifact.blocks[idx].useful = result.useful
-                # Always stamp mini_summary so "processed?" is just "is not None"
-                artifact.blocks[idx].mini_summary = result.mini_summary or "N/A"
-                success = True
-
-                # Throttled checkpoint save (not every block — every N%)
+        def _commit(idx: int, useful: bool, mini_summary: str) -> None:
+            """Stamp one finished block; checkpoint under the same lock."""
+            with state_lock:
+                artifact.blocks[idx].useful = useful
+                artifact.blocks[idx].mini_summary = mini_summary
                 if checkpoint.should_save():
                     save_artifact_sync(artifact, book_yaml_path)
-                    print(f"   💾 Checkpoint save at {checkpoint.progress_pct:.0f}% ({idx+1}/{total})", flush=True)
+                    print(f"   💾 Checkpoint save at {checkpoint.progress_pct:.0f}%", flush=True)
 
-                print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → useful={result.useful}"
-                      f"{f' (attempt {attempt}/{max_per_block_retries})' if attempt > 1 else ''}", flush=True)
-                break
+        def _process_one(idx: int) -> None:
+            block = artifact.blocks[idx]
+            print(f"   📤 Processing {idx+1}/{total}: {block.block_id}", flush=True)
 
-            except Exception as e:
-                last_error = e
-                if attempt < max_per_block_retries:
-                    delay = 2 ** attempt  # exponential backoff: 2, 4, 8, ...
-                    print(f"   ↻ Retry {attempt}/{max_per_block_retries} for {block.block_id} "
-                          f"after {delay}s: {type(e).__name__}", flush=True)
-                    time_mod.sleep(delay)
+            # ── Oversized blocks get split into parts first ──
+            if budget is not None:
+                system_tok = estimate_tokens(system_text, llm_settings.model)
+                block_tok = estimate_tokens(block.text or "", llm_settings.model)
+                total_est = system_tok + block_tok + 50  # 50 for "BLOCK:\n" overhead
+                if total_est > budget.usable:
+                    combined = _split_oversized_block_for_mini_summary(
+                        block,
+                        budget=budget,
+                        llm_settings=llm_settings,
+                        prompt_file=prompt_file,
+                        max_retries=max_per_block_retries,
+                    )
+                    if combined is not None:
+                        _commit(idx, True, combined)
+                        print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → split into parts, useful=True", flush=True)
+                        return
+                    print(f"   ↻ Block {block.block_id} oversized but can't split — trying normal call", flush=True)
 
-        if not success:
+            last_error: Exception | None = None
+            for attempt in range(1, max_per_block_retries + 1):
+                try:
+                    result = _call_json_sync(
+                        [
+                            {"role": "system", "content": system_text},
+                            {"role": "user", "content": f"BLOCK:\n{block.text}"},
+                        ],
+                        llm_settings,
+                        response_model=MiniSummaryResult,
+                    )
+                    # Always stamp mini_summary so "processed?" is just "is not None"
+                    _commit(idx, result.useful, result.mini_summary or "N/A")
+                    print(f"   ✓ Done {idx+1}/{total}: {block.block_id} → useful={result.useful}"
+                          f"{f' (attempt {attempt}/{max_per_block_retries})' if attempt > 1 else ''}", flush=True)
+                    return
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_per_block_retries:
+                        delay = 2 ** attempt  # exponential backoff: 2, 4, 8, ...
+                        print(f"   ↻ Retry {attempt}/{max_per_block_retries} for {block.block_id} "
+                              f"after {delay}s: {type(e).__name__}", flush=True)
+                        time_mod.sleep(delay)
+
             # All retries exhausted — HARD FAIL. The cartographer cannot
             # produce valid chapter mappings with missing block fingerprints.
             # Let the caller catch this and move on to the next book.
@@ -302,6 +442,26 @@ def generate_block_mini_summaries(
                 f"Last error: {type(last_error).__name__}: {last_error}. "
                 f"Cannot proceed to cartography with incomplete block summaries."
             )
+
+        if workers == 1:
+            for idx in generate_indices:
+                _process_one(idx)
+        else:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mini") as executor:
+                futures = {executor.submit(_process_one, idx): idx for idx in generate_indices}
+                try:
+                    for future in as_completed(futures):
+                        future.result()  # re-raises the worker's exception, if any
+                except BaseException:
+                    # Save what finished, then propagate (fail, Ctrl-C, ...).
+                    # In-flight workers may commit after this save; resume
+                    # redoes at most those blocks (mini_summary still None).
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    with state_lock:
+                        save_artifact_sync(artifact, book_yaml_path)
+                    raise
+    else:
+        print("   ✓ Gate skipped every pending block — nothing to generate", flush=True)
 
     # Final anchor save — ensures even the last few blocks are persisted
     save_artifact_sync(artifact, book_yaml_path)
@@ -328,8 +488,16 @@ def generate_block_mini_summaries(
         "useful_blocks": useful_blocks,
         "skipped_blocks": len(artifact.blocks) - useful_blocks,
         "failed_blocks": failures,
-        "parallel_calls": 1,  # No parallel - sequential only now
+        "parallel_calls": workers,
         "model": llm_settings.model,
+        "gate_enabled": decision is not None and decision.enabled,
+        "gate_model": gate_model,
+        "gate_skipped": gate_stats["skipped"],
+        "gate_confident": gate_stats["generate"],
+        "gate_uncertain": gate_stats["uncertain"],
+        "gate_failed_open": gate_stats["failed_open"],
+        "gate_batches": gate_stats["batches"],
+        "gate_splits": gate_stats["splits"],
     }
     return artifact.touch()
 
@@ -736,13 +904,15 @@ def generate_precise_blocks(
     encoding_model: str = "gpt-4o-mini",
     llm_settings: LLMSettings,
     prompt_file: str = "prompt_precise_chunk.md",
+    workers: int = 1,
 ) -> list[BlockArtifact]:
     """Step 0: LLM-based precise semantic boundary detection.
 
     Splits source into ~window_tokens token windows (with overlap),
     sends each window to the LLM as line-numbered text, and collects
     semantic boundary line numbers. Converts boundaries into precise
-    BlockArtifact objects that never split mid-thought.
+    BlockArtifact objects that never split mid-thought. Windows are
+    independent and run on ``workers`` threads (1 = sequential).
 
     Falls back to mechanical token-splitting if no boundaries are found.
     """
@@ -772,19 +942,17 @@ def generate_precise_blocks(
     # Collect boundaries from all windows (deduplicated via set)
     all_boundaries: set[int] = set()
     system_template = load_prompt(prompt_file)
+    system = system_template.replace("{max_boundaries}", str(max_boundaries_per_window))
+    total_windows = len(windows)
 
-    for win_idx, (global_start, window_lines) in enumerate(windows):
+    def _detect_window(win_idx: int, global_start: int, window_lines: list[str]) -> list[int]:
         # Format: "1 | text\n2 | text\n..."
         formatted = "\n".join(
             f"{i + 1} | {line}" for i, line in enumerate(window_lines)
         )
-
-        system = system_template.replace("{max_boundaries}", str(max_boundaries_per_window))
-
-        print(f"   🔍 Window {win_idx + 1}/{len(windows)}: "
+        print(f"   🔍 Window {win_idx + 1}/{total_windows}: "
               f"lines {global_start + 1}–{global_start + len(window_lines)} "
               f"({len(window_lines)} lines, ~{_token_count('\n'.join(window_lines), encoder)} tokens)", flush=True)
-
         # Window-level failure is a HARD failure: a missing window leaves
         # gaps in our boundary map, which corrupts every downstream chunk.
         # The retry layer (structured_completion) has already tried multiple
@@ -799,17 +967,38 @@ def generate_precise_blocks(
             llm_settings,
             response_model=PreciseChunkResult,
         )
+        print(f"   ✅ Window {win_idx + 1}: {len(result.boundaries)} boundaries → "
+              f"{result.boundaries[:5]}{'...' if len(result.boundaries) > 5 else ''}", flush=True)
+        return result.boundaries
 
+    if workers <= 1:
+        window_results = [
+            _detect_window(win_idx, global_start, window_lines)
+            for win_idx, (global_start, window_lines) in enumerate(windows)
+        ]
+    else:
+        print(f"   🧵 Detecting boundaries with {workers} workers", flush=True)
+        window_results: list = [None] * total_windows
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="precise") as executor:
+            futures = {
+                executor.submit(_detect_window, win_idx, global_start, window_lines): win_idx
+                for win_idx, (global_start, window_lines) in enumerate(windows)
+            }
+            try:
+                for future in as_completed(futures):
+                    window_results[futures[future]] = future.result()
+            except BaseException:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
+
+    for (global_start, window_lines), boundaries in zip(windows, window_results):
         # Convert local 1-based line numbers to global 0-based indices
-        for local_line in result.boundaries:
+        for local_line in boundaries:
             if 1 <= local_line <= len(window_lines):
                 global_line_idx = global_start + local_line - 1
                 # Exclude very first and very last line of the entire text
                 if 0 < global_line_idx < len(raw_lines):
                     all_boundaries.add(global_line_idx)
-
-        print(f"   ✅ Window {win_idx + 1}: {len(result.boundaries)} boundaries → "
-              f"{result.boundaries[:5]}{'...' if len(result.boundaries) > 5 else ''}", flush=True)
 
     sorted_boundaries = sorted(all_boundaries)
     print(f"   📏 Collected {len(sorted_boundaries)} unique boundaries across all windows", flush=True)
@@ -882,6 +1071,7 @@ def map_book_structure(
     window_tokens: int = 8000,
     max_boundaries_per_window: int = 16,
     overlap_pct: float = 0.05,
+    workers: int = 1,
 ) -> BookArtifact:
     """Map book structure into blocks.
 
@@ -898,7 +1088,8 @@ def map_book_structure(
 
     if llm_settings is not None:
         print(f"   🧠 Step 0: Precise semantic chunking "
-              f"(~{window_tokens} token windows, max {max_boundaries_per_window} boundaries/window)", flush=True)
+              f"(~{window_tokens} token windows, max {max_boundaries_per_window} boundaries/window, "
+              f"{'sequential' if workers <= 1 else f'{workers} workers'})", flush=True)
         artifact.blocks = generate_precise_blocks(
             source_text,
             window_tokens=window_tokens,
@@ -906,6 +1097,7 @@ def map_book_structure(
             overlap_pct=overlap_pct,
             encoding_model=encoding_model,
             llm_settings=llm_settings,
+            workers=workers,
         )
         method = "precise_llm"
     else:
@@ -942,5 +1134,6 @@ def map_book_structure(
             "window_tokens": window_tokens,
             "max_boundaries_per_window": max_boundaries_per_window,
             "overlap_pct": overlap_pct,
+            "workers": workers,
         })
     return artifact.touch()

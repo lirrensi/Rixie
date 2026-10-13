@@ -230,6 +230,10 @@ v2:
     temperature: 0.2
     request_timeout_seconds: 300
     thinking: true                         # Enable reasoning effort
+    decision_base_url: "http://localhost:58081/v1"  # Decision server (separate process)
+    decision_model: "clef-flash"           # Ignored by single-model servers
+    decision_timeout_seconds: 120
+```
 
   profiles:
     mini_summary:
@@ -283,7 +287,6 @@ v2:
 ```
 
 #### V2 Execution
-
 ```yaml
 v2:
   execution:
@@ -291,11 +294,33 @@ v2:
     context_window: 128000              # Model's total context window
     prompt_overhead: 4000               # Tokens reserved for system prompts
     response_reserve: 8000              # Tokens reserved for LLM responses
+    precart_mode: "classic"             # "classic" = sequential generative; "decision" = gate + parallel
+    decision_enabled: true              # (decision mode) pre-gate mini-summaries with a decision model
+    decision_batch_blocks: 20           # (decision mode) max blocks per gate request
+    decision_batch_tokens: 24000        # (decision mode) max estimated input tokens per gate request
+    decision_useful_high: 0.7           # (decision mode) score >= high → confident content, generate
+    decision_useful_low: 0.1            # (decision mode) score <= low → non-content, skip generation
+    gate_question_file: "question_useful.md"  # (decision mode) gate question + criteria (v2/, editable)
+    mini_summary_workers: 1             # (decision mode) parallel fingerprint workers (match chat slots)
+    precise_workers: 1                  # (decision mode) parallel precise-chunk workers (match chat slots)
 ```
 
 - `checkpoint_pct`: At 5%, progress saves every 5% of work completed. Ctrl+C recovery costs at most 5% of redundant calls.
 - `context_window` / `prompt_overhead` / `response_reserve`: Used to calculate available tokens for content. These should match your model's actual limits.
+- `precart_mode`: One switch for the whole pre-cartography path. `"classic"` (default) is the original behavior: sequential generative mini-summaries, no decision server needed, all `decision_*` / `*_workers` keys ignored. `"decision"` enables the decision-model pre-gate plus parallel fan-outs; it needs `v2.defaults.decision_base_url` pointing at a **separate** `/v1/systemone` server (e.g. clef-flash — it cannot share a process with the chat model).
+- `decision_*` (decision mode only): Before generating fingerprints, one yes/no question per block is batched to the decision endpoint. The question wording lives in `v2/question_useful.md` (instructions + true/false criteria, `---`-separated, English). Blocks at or below `decision_useful_low` are stamped `useful=false` with no generative call; everything else generates as usual, so uncertain blocks fail open to generation. Gate errors (server down, oversized batch) also fail open. Batches respect `decision_batch_tokens`, which must fit the decision server's **physical batch** (`-ub`), NOT just its context (`-c`) — oversized batches split recursively. Recalibrate after rewording: `uv run python -m v2.calibrate` scores your books against stored `useful` labels and reports the threshold grid (see Calibrating the gate below).
+- `mini_summary_workers` / `precise_workers` (decision mode only): Thread workers for the two pre-cartography fan-outs. Set to your chat server's slot count (`/slots`); keep 1 while single-slot. Checkpoints stay resume-safe under parallelism. Forced to 1 in classic mode.
 
+#### Calibrating the gate
+
+```bash
+uv run python -m v2.calibrate --per-book              # score all books, sweep thresholds
+uv run python -m v2.calibrate slug-a slug-b           # subset of books
+uv run python -m v2.calibrate --scores s.jsonl        # also save raw scores
+uv run python -m v2.calibrate --scores s.jsonl --no-run  # re-sweep saved scores, no model calls
+```
+
+The script prints accuracy-on-acted (correct decisions ÷ blocks the gate acted on) per threshold pair and a verdict: the lowest-cost pair at or above 90% accuracy with lost-content ≤ 1% (`--acc-floor`, `--max-loss`, `--loss-cost` override; losing content costs 10× keeping boilerplate). Copy its `decision_useful_low` / `decision_useful_high` into `config.yaml`. Calibrated 2026-10-13 against [Cloudflare Clef-Flash](https://openrouter.ai/cloudflare/clef-flash) (Q8 GGUF via llama-server, scores in `private/gate_benchmark_2026-10-13.jsonl`) on 8 books / 2,862 labeled blocks: low=0.1 high=0.7 → 97.8% acc-on-acted, skips 4.5% of blocks, catches 39% of non-content, loses 8/2,551 content blocks (0.3%) — all index lists, footnote dumps, or link tables. A more aggressive low=0.15 (6.3% skipped) starts eating real prose (biographical entries, historical narrative) and was rejected on read-through.
 ---
 
 ## Prompt Files

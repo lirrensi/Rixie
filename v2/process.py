@@ -26,6 +26,7 @@ from v2.budget import ContextBudget
 from v2.cartographer import LLMSettings, generate_block_mini_summaries, group_blocks_into_chapters, map_book_structure
 from v2.checkpoint import save_artifact_sync
 from v2.config import load_repo_config, load_v2_config, resolve_profile
+from v2.decisions import DecisionSettings
 from v2.export_epub import export_epub
 from v2.ingest import detect_format, ingest_source
 from v2.renderer import render_outputs
@@ -129,6 +130,16 @@ def prepare_workspace(
     checkpoint_pct: float = 5.0,
     # Context budget (None = no splitting)
     budget: ContextBudget | None = None,
+    # Pre-cartography style. Classic = sequential generative, decision=None.
+    # Decision mode = gate + parallel fan-outs (needs a decision server).
+    decision_settings: DecisionSettings | None = None,
+    decision_batch_blocks: int = 20,
+    decision_batch_tokens: int = 24000,
+    decision_high: float = 0.7,
+    decision_low: float = 0.1,
+    gate_question_file: str = "question_useful.md",
+    mini_summary_workers: int = 1,
+    precise_workers: int = 1,
 ) -> tuple[Path, Path, Path]:
     slug = slugify(source_path.name if source_path else "book")
     workspace_dir = books_dir / slug
@@ -182,6 +193,7 @@ def prepare_workspace(
             window_tokens=window_tokens,
             max_boundaries_per_window=max_boundaries_per_window,
             overlap_pct=overlap_pct,
+            workers=precise_workers,
         )
         print(f"   ✅ Created {len(artifact.blocks)} blocks")
         if max_blocks is not None and max_blocks > 0:
@@ -194,15 +206,24 @@ def prepare_workspace(
 
     if mini_summary_settings and artifact.blocks and artifact.stages["mini_summaries"].status != "done":
         print("   [3/6] Generating block mini summaries...")
-        print(f"   → Using {mini_summary_settings.model} - SEQUENTIAL MODE")
+        gate_on = decision_settings is not None and decision_settings.enabled
+        print(f"   → Using {mini_summary_settings.model} - "
+              f"{'SEQUENTIAL' if mini_summary_workers <= 1 else f'{mini_summary_workers} workers'}, "
+              f"gate {'ON' if gate_on else 'OFF'}", flush=True)
         artifact = generate_block_mini_summaries(
             artifact,
             workspace_dir,
             llm_settings=mini_summary_settings,
-            parallel_calls=1,  # Always 1 - no parallel
+            parallel_calls=mini_summary_workers,
             prompt_file=str(mini_summary_profile.get("prompt_file", "prompt_block_mini_summary.md")),
             checkpoint_pct=checkpoint_pct,
             budget=budget,
+            decision=decision_settings,
+            decision_batch_blocks=decision_batch_blocks,
+            decision_batch_tokens=decision_batch_tokens,
+            decision_high=decision_high,
+            decision_low=decision_low,
+            gate_question_file=gate_question_file,
         )
         useful = sum(1 for b in artifact.blocks if b.useful)
         print(f"   ✅ Mini summaries done: {useful}/{len(artifact.blocks)} useful")
@@ -382,6 +403,28 @@ def main(argv: list[str] | None = None) -> int:
     print(f"   📐 Context budget: window={budget.context_window}, "
           f"usable={budget.usable} tokens per call")
 
+    precart_mode = str(execution.get("precart_mode", "classic")).strip().lower()
+    if precart_mode not in ("classic", "decision"):
+        raise SystemExit(f"v2.execution.precart_mode must be 'classic' or 'decision', got {precart_mode!r}")
+    decision_mode = precart_mode == "decision"
+    print(f"   🔀 Pre-cartography mode: {precart_mode.upper()}"
+          f"{' (decision pre-gate + parallel fan-outs)' if decision_mode else ' (sequential generative, no decision server)'}")
+
+    decision_settings: DecisionSettings | None = None
+    if decision_mode and execution.get("decision_enabled", True):
+        decision_base = defaults.get("decision_base_url")
+        if not decision_base:
+            print("   ⚠️  decision mode but no v2.defaults.decision_base_url — gate OFF, workers still apply")
+        else:
+            decision_settings = DecisionSettings(
+                base_url=str(decision_base),
+                model=defaults.get("decision_model"),
+                timeout=int(defaults.get("decision_timeout_seconds", 120)),
+                enabled=True,
+            )
+    mini_workers = int(execution.get("mini_summary_workers", 1)) if decision_mode else 1
+    precise_workers = int(execution.get("precise_workers", 1)) if decision_mode else 1
+
     success = 0
     failed = 0
     for source_path in books:
@@ -411,6 +454,14 @@ def main(argv: list[str] | None = None) -> int:
                 overlap_pct=float(blocking.get("overlap_pct", 0.05)),
                 checkpoint_pct=float(execution.get("checkpoint_pct", 5.0)),
                 budget=budget,
+                decision_settings=decision_settings,
+                decision_batch_blocks=int(execution.get("decision_batch_blocks", 20)),
+                decision_batch_tokens=int(execution.get("decision_batch_tokens", 24000)),
+                decision_high=float(execution.get("decision_useful_high", 0.7)),
+                decision_low=float(execution.get("decision_useful_low", 0.1)),
+                gate_question_file=str(execution.get("gate_question_file", "question_useful.md")),
+                mini_summary_workers=mini_workers,
+                precise_workers=precise_workers,
             )
 
             print(f"✅ V2 workspace ready: {workspace_dir}")

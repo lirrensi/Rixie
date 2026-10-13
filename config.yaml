@@ -145,6 +145,16 @@ v2:
     # Supported by: gpt-4o*, claude-3*, deepseek-*, and many others.
     thinking: true
 
+    # Decision-model endpoint for binary pre-gates (useful/non-content).
+    # Served by a SEPARATE server process running a decision model
+    # (e.g. clef-flash GGUF via llama-server on port 58081).
+    # The generative server above cannot answer /v1/systemone and vice versa.
+    # NOTE 2026-10-13: clef-flash currently ON :58080, chat model down —
+    # set decision_base_url to 58080 and base_urls to the chat port once back.
+    decision_base_url: "http://localhost:58080/v1"
+    decision_model: "clef-flash"
+    decision_timeout_seconds: 120
+
   # ── V2 Profiles ──────────────────────────────────────────────────────────
   # Each profile corresponds to a pipeline stage.
   # You can override any of: model, temperature, base_url, api_key,
@@ -246,3 +256,32 @@ v2:
     # Tokens reserved for the LLM's response tokens.
     # Subtracted (with prompt_overhead) from context_window.
     response_reserve: 8000
+    # ── Pre-cartography style ──
+    # "classic":  sequential generative mini-summaries, no decision server.
+    #             Works everywhere; same behavior as before the gate existed.
+    # "decision": decision-model pre-gate + parallel workers (below).
+    #             Needs v2.defaults.decision_base_url pointing at a
+    #             /v1/systemone server (separate process, e.g. clef-flash).
+    precart_mode: "classic"
+
+    # ── Decision mode settings (only used when precart_mode is "decision") ──
+    # The mini-summary stage first asks the decision model one yes/no
+    # question per block (batched, no text generated):
+    #   score <= low  → non-content, skip generation entirely
+    #   score >= high → generate fingerprint as usual
+    #   between       → generate (fail open; ambiguous blocks stay included)
+    decision_enabled: true
+    decision_batch_blocks: 20
+    # Max estimated input tokens per gate request. MUST fit the decision
+    # server's physical batch (-ub), NOT just its context (-c).
+    # 24000 ≈ 20 real blocks at ~1.1k tokens each, under a 32k ceiling.
+    decision_batch_tokens: 24000
+    decision_useful_high: 0.7
+    decision_useful_low: 0.1
+    # Gate question file (v2/): instructions + true/false criteria, `---`-separated.
+    # Edit the wording, then re-run `uv run python -m v2.calibrate` to re-fit thresholds.
+    gate_question_file: "question_useful.md"
+    # Parallel workers for the two pre-cartography fan-outs.
+    # Match (do not exceed) your servers' slot counts.
+    mini_summary_workers: 1
+    precise_workers: 1

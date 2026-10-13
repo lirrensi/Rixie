@@ -26,6 +26,8 @@ v2-book:           ## Run V2 pipeline on a specific book (usage: make v2-book B=
 v2-smoke:          ## V2 smoke test — first 10 blocks only (usage: make v2-smoke B=file.epub)
 	uv run rixie v2 input/$(B) --max-blocks 10
 
+v2-calibrate:      ## Fit gate thresholds vs stored labels (usage: make v2-calibrate [ARGS="slug --per-book"])
+	uv run python -m v2.calibrate $(ARGS)
 # ── Audio ────────────────────────────────────────────────────────────────────
 
 audiobook:         ## Run V1 audiobook generator (interactive)
